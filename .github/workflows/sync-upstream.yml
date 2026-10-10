@@ -1,0 +1,56 @@
+name: sync-upstream
+
+# 定时把上游 linguo2625469/workbuddy2api-panel 的 main 同步到本仓库 main。
+# 说明：main 只由本工作流使用 GITHUB_TOKEN 推送，而 GITHUB_TOKEN 触发的推送
+# 不会再触发其它 workflow，因此不会产生递归/循环触发。
+# 定时工作流只在默认分支（main）上执行，所以本文件必须位于 main。
+on:
+  schedule:
+    - cron: "0 */6 * * *" # 每 6 小时（UTC）拉取一次上游
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 拉取上游并合并到 main
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/linguo2625469/workbuddy2api-panel.git
+          git fetch upstream main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main 已包含上游最新提交，无需同步"
+            exit 0
+          fi
+
+          # 常规三方合并；若上游改动了本仓库已删除的工作流文件，
+          # 会形成 delete/modify 冲突——此处保持“删除”这一本地意图。
+          if ! git merge upstream/main --no-edit -m "chore: sync upstream main"; then
+            echo "::warning::合并出现冲突，尝试保留本仓库对上游工作流的移除"
+            git rm -f .github/workflows/docker-ghcr.yml .github/workflows/go-binaries.yml 2>/dev/null || true
+            if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+              echo "::error::仍有未解决冲突，需人工处理："
+              git diff --name-only --diff-filter=U
+              exit 1
+            fi
+            git commit --no-edit -m "chore: sync upstream main (keep local workflow removals)"
+          fi
+
+          git push origin main

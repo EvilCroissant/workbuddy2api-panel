@@ -1,0 +1,42 @@
+name: main-to-develop
+
+# 定时把 main 合并进 develop。develop 是集成分支，docker 镜像构建基于它。
+# 定时工作流只在默认分支（main）上执行，因此本文件位于 main。
+on:
+  schedule:
+    - cron: "30 */6 * * *" # 每 6 小时，与 sync-upstream 错开 30 分钟
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: 合并 main 到 develop
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main develop
+          git checkout develop
+
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "develop 已包含 main 最新提交，无需合并"
+            exit 0
+          fi
+
+          git merge origin/main --no-edit -m "chore: merge main into develop"
+          git push origin develop
