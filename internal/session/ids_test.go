@@ -3,9 +3,12 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+var uuidV4RE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // imagePartSig 计算 part 原文摘要（sha256 前 8 hex），供期望值精确构造——
 // 签名算法变更时测试期望值随此 helper 单点同步。
@@ -59,6 +62,25 @@ func TestNewMessageIDFormat(t *testing.T) {
 				t.Fatalf("NewMessageID() = %q has non-hex char %q", id, ch)
 			}
 		}
+	}
+}
+
+// TestUUIDv4Formats 覆盖国际版 chat 会话头所需的 UUID v4：随机值格式合法，
+// 稳定派生值同输入同值、异输入异值，空输入保持随机。
+func TestUUIDv4Formats(t *testing.T) {
+	for _, id := range []string{NewUUID(), UUIDv4For("conversation:abc"), UUIDv4For("request:abc"), UUIDv4For("")} {
+		if !uuidV4RE.MatchString(id) {
+			t.Fatalf("UUID value %q is not RFC 4122 v4", id)
+		}
+	}
+	if a, b := UUIDv4For("same"), UUIDv4For("same"); a != b {
+		t.Fatalf("UUIDv4For same input drifted: %q vs %q", a, b)
+	}
+	if a, b := UUIDv4For("a"), UUIDv4For("b"); a == b {
+		t.Fatalf("UUIDv4For different inputs collided: %q", a)
+	}
+	if a, b := UUIDv4For(""), UUIDv4For(""); a == b {
+		t.Fatalf("UUIDv4For empty input should be fresh: %q vs %q", a, b)
 	}
 }
 

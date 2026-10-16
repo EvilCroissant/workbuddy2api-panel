@@ -10,6 +10,7 @@ package session
 import (
 	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 // 复用 ExtractKey 的识别顺序：metadata 优先、snake 优先于 camel）。
 // 与 ExtractKey 的差异：**只认 conversationId，绝不回落 user_id**——X-Conversation-ID
 // 语义是"对话 ID"，user_id 回落会污染后台按对话聚合的判据。
-// 缺失返回 ""（不伪造：透传客户端原值优先，客户端没给就不发）。
+// 缺失返回 ""；聊天头层会为上游渠道校验补生成 UUID v4，不改写请求体中的会话语义。
 func ResolveConversationID(body []byte) string {
 	if len(body) == 0 {
 		return ""
@@ -44,16 +45,49 @@ func ResolveConversationID(body []byte) string {
 	return strOrEmpty(obj["conversationId"])
 }
 
-// NewMessageID 生成消息级 ID：32 位 hex（UUID v4 去横线的长度形态），对齐官方
-// X-Request-ID / X-Conversation-Message-ID。crypto/rand 失败（理论上不可能）时回落
-// math/rand/v2 双 uint64 拼 32 hex——恒 32 hex、恒合法，可安全用作 B3 TraceId。
-func NewMessageID() string {
+// randomIDBytes 生成 16 字节随机 ID 原料。crypto/rand 失败（理论上不可能）时回落
+// math/rand/v2 双 uint64，保证调用方始终拿到非空、定长输入。
+func randomIDBytes() []byte {
 	b := make([]byte, 16)
 	if _, err := cryptorand.Read(b); err == nil {
-		return hex.EncodeToString(b)
+		return b
 	}
-	// 熵源故障的极端兜底：仍保证 32 hex（fallbackID 不 panic、不空串）。
-	return fmt.Sprintf("%016x%016x", uint64(rand.Uint64())|1, rand.Uint64())
+	binary.BigEndian.PutUint64(b[0:8], uint64(rand.Uint64())|1)
+	binary.BigEndian.PutUint64(b[8:16], rand.Uint64())
+	return b
+}
+
+// NewMessageID 生成消息级 ID：32 位 hex，对齐官方 X-Request-ID。crypto/rand 失败
+// （理论上不可能）时回落 math/rand/v2 双 uint64 拼 32 hex——恒 32 hex、恒合法，
+// 可安全用作 B3 TraceId。
+func NewMessageID() string {
+	return hex.EncodeToString(randomIDBytes())
+}
+
+// NewUUID 生成 RFC 4122 UUID v4（36 字符带横线）。国际版 chat 的
+// X-Conversation-* 头要求三个值均为 UUID v4；crypto/rand 失败时仍由 randomIDBytes
+// 的 math/rand/v2 兜底，保持格式恒合法。
+func NewUUID() string {
+	return formatUUIDv4(randomIDBytes())
+}
+
+// UUIDv4For 从任意稳定值派生 UUID v4：同一输入恒得同一 UUID，异输入相互独立。
+// 用于把现有 32 hex / 客户端会话键转换成上游可接受的会话头值，同时保留本地
+// issue #35 的轮转内聚合稳定性。空输入生成随机 UUID（无稳定键可复用）。
+func UUIDv4For(value string) string {
+	if value == "" {
+		return NewUUID()
+	}
+	sum := sha256.Sum256([]byte(value))
+	return formatUUIDv4(sum[:16])
+}
+
+// formatUUIDv4 把 16 字节写成 RFC 4122 UUID v4，并设置 version/variant 位。
+// 输入切片会被就地修改；调用方只传临时随机字节或哈希结果。
+func formatUUIDv4(b []byte) string {
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // deriveSalt 进程启动随机盐：对所有稳定聚合 ID 的纯派生统一加盐，使派生值无法

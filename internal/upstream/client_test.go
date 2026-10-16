@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -257,11 +258,15 @@ func TestRefreshSessionDead(t *testing.T) {
 
 func TestChatStreamSendsHeadersAndStreamTrue(t *testing.T) {
 	var gotAuth, gotUID, gotProduct string
+	var gotConversationID, gotConversationRequestID, gotConversationMessageID string
 	var gotBody []byte
 	c := testClient(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
 		gotUID = r.Header.Get("X-User-Id")
 		gotProduct = r.Header.Get("X-Product")
+		gotConversationID = r.Header.Get("X-Conversation-ID")
+		gotConversationRequestID = r.Header.Get("X-Conversation-Request-ID")
+		gotConversationMessageID = r.Header.Get("X-Conversation-Message-ID")
 		gotBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: 200,
@@ -280,6 +285,16 @@ func TestChatStreamSendsHeadersAndStreamTrue(t *testing.T) {
 	rc.Close()
 	if gotAuth != "Bearer at" || gotUID != "u1" || gotProduct != "WorkBuddy" {
 		t.Errorf("headers: auth=%q uid=%q product=%q", gotAuth, gotUID, gotProduct)
+	}
+	uuidV4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	ids := []string{gotConversationID, gotConversationRequestID, gotConversationMessageID}
+	for i, id := range ids {
+		if !uuidV4.MatchString(id) {
+			t.Errorf("conversation header[%d]=%q want UUID v4", i, id)
+		}
+	}
+	if ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
+		t.Errorf("conversation headers must be distinct: %q", ids)
 	}
 	if !bytes.Contains(gotBody, []byte(`"stream":true`)) {
 		t.Errorf("stream not forced: %s", gotBody)
