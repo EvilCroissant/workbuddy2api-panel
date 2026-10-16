@@ -707,11 +707,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 循环外**生成一次，循环内每次出站原样复用 → 换号/重试/降级全部同 ID，后台不再
 	// 碎片化（此前网关一个都不发，上游按 HTTP 请求逐条记账，同一对话几十上百个
 	// RequestID）。
-	//   - conversationID：body 提取（透传客户端原值，缺省空串——不伪造）；
-	//   - conversationRequestID：入站 X-Conversation-Request-ID 透传优先，否则按
-	//     粘性 key 进程内稳定生成；粘性 key 也空时走轮级兜底（TurnKey/TurnRequestID），
-	//     无 user 消息时退化成本请求级随机——轮转内捕获一次即共享；
-	//   - messageID 在 ChatHeaders 内每条消息生成（消息级独立，无需外部可见）。
+	//   - conversationID：body 提取，缺省回落粘性会话键；上游层再稳定转换为 UUID；
+	//   - conversationRequestID：入站值优先（上游层规范成 32 hex），否则按粘性 key
+	//     与轮级 TurnKey 稳定生成；无 user 消息时退化成本请求级随机——轮转内捕获
+	//     一次即共享；
+	//   - message ID 在 ChatHeaders 内每条出站生成 32 hex，并与 X-Request-ID 相同。
 	// ConversationID passes the client dialog id through. Clients that have none
 	// (Anthropic / Claude Code traffic) fall back to the session key, otherwise
 	// the upstream prompt_cache_key degrades into one constant per account and

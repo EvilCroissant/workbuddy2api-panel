@@ -132,13 +132,13 @@ type Config struct {
 		// 全部出站请求生效：chat/refresh/checkin/balance/report/travel/FetchModels。
 		// 默认值已对齐官方 WorkBuddy 桌面形态（三段式），用户仍可配完全自定义值改写。
 		UserAgent string `json:"user_agent"`
-		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与归属头
-		// X-IDE-Version）。空 = 内置默认（对齐官方 5.5.4 分发包）。
+		// ClientVersion WorkBuddy App 版本段（出站 UA 的 `WorkBuddy/<ver>` 与归属头
+		// X-IDE-Version）。空 = 按 realm 内置默认（国内 5.8.2 / 国际 5.8.4）；非空覆盖两端。
 		ClientVersion string `json:"client_version"`
-		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认（官方内置 CLI 2.137.1）。
+		// CliVersion 出站 UA 中 `CLI/<ver>` 段的版本。空 = 内置默认（官方内置 CLI 2.161.0）。
 		CliVersion string `json:"cli_version"`
-		// ClientName 用量归属头取值（X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
-		// 空 = 旧行为 X-Product="SaaS" 不设 X-IDE-*；配 "WorkBuddy" 则四头跟随。
+		// ClientName 控制 X-IDE-Name/Type 的归属名；X-Product 固定 SaaS，不跟随本字段。
+		// 空 = WorkBuddy；显式 "SaaS" = 保留旧行为（不设 X-IDE-*）。
 		ClientName string `json:"client_name"`
 		// DeviceToken 设备风控 Token（X-Device-Token 头）全局兜底；空 = 不注入。
 		// 每号 auth 文件的 device_token 键优先于本项。

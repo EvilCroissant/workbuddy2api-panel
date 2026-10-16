@@ -259,6 +259,7 @@ func TestRefreshSessionDead(t *testing.T) {
 func TestChatStreamSendsHeadersAndStreamTrue(t *testing.T) {
 	var gotAuth, gotUID, gotProduct string
 	var gotConversationID, gotConversationRequestID, gotConversationMessageID string
+	var gotRequestID, gotRootRequestID, gotB3TraceID, gotB3SpanID string
 	var gotBody []byte
 	c := testClient(func(r *http.Request) (*http.Response, error) {
 		gotAuth = r.Header.Get("Authorization")
@@ -267,6 +268,10 @@ func TestChatStreamSendsHeadersAndStreamTrue(t *testing.T) {
 		gotConversationID = r.Header.Get("X-Conversation-ID")
 		gotConversationRequestID = r.Header.Get("X-Conversation-Request-ID")
 		gotConversationMessageID = r.Header.Get("X-Conversation-Message-ID")
+		gotRequestID = r.Header.Get("X-Request-ID")
+		gotRootRequestID = r.Header.Get("X-Root-Request-ID")
+		gotB3TraceID = r.Header.Get("X-B3-TraceId")
+		gotB3SpanID = r.Header.Get("X-B3-SpanId")
 		gotBody, _ = io.ReadAll(r.Body)
 		return &http.Response{
 			StatusCode: 200,
@@ -283,21 +288,118 @@ func TestChatStreamSendsHeadersAndStreamTrue(t *testing.T) {
 		t.Errorf("200 response should carry nil body, got %q", respBody)
 	}
 	rc.Close()
-	if gotAuth != "Bearer at" || gotUID != "u1" || gotProduct != "WorkBuddy" {
+	if gotAuth != "Bearer at" || gotUID != "u1" || gotProduct != "SaaS" {
 		t.Errorf("headers: auth=%q uid=%q product=%q", gotAuth, gotUID, gotProduct)
 	}
 	uuidV4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	ids := []string{gotConversationID, gotConversationRequestID, gotConversationMessageID}
-	for i, id := range ids {
-		if !uuidV4.MatchString(id) {
-			t.Errorf("conversation header[%d]=%q want UUID v4", i, id)
+	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
+	if !uuidV4.MatchString(gotConversationID) {
+		t.Errorf("X-Conversation-ID=%q want UUID v4", gotConversationID)
+	}
+	for name, id := range map[string]string{
+		"X-Conversation-Request-ID": gotConversationRequestID,
+		"X-Conversation-Message-ID": gotConversationMessageID,
+		"X-Request-ID":              gotRequestID,
+		"X-Root-Request-ID":         gotRootRequestID,
+	} {
+		if !hex32.MatchString(id) {
+			t.Errorf("%s=%q want 32 hex", name, id)
 		}
 	}
-	if ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
-		t.Errorf("conversation headers must be distinct: %q", ids)
+	if gotConversationMessageID != gotRequestID {
+		t.Errorf("X-Conversation-Message-ID=%q want X-Request-ID=%q", gotConversationMessageID, gotRequestID)
+	}
+	if gotRootRequestID != gotConversationRequestID {
+		t.Errorf("X-Root-Request-ID=%q want X-Conversation-Request-ID=%q", gotRootRequestID, gotConversationRequestID)
+	}
+	if gotB3TraceID != gotConversationRequestID {
+		t.Errorf("X-B3-TraceId=%q want X-Conversation-Request-ID=%q", gotB3TraceID, gotConversationRequestID)
+	}
+	if len(gotConversationMessageID) != 32 || gotB3SpanID != gotConversationMessageID[:16] {
+		t.Errorf("X-B3-SpanId=%q want message prefix %q", gotB3SpanID, gotConversationMessageID[:min(16, len(gotConversationMessageID))])
+	}
+	if gotConversationRequestID == gotConversationMessageID {
+		t.Errorf("request and message IDs must be distinct: %q", gotConversationRequestID)
 	}
 	if !bytes.Contains(gotBody, []byte(`"stream":true`)) {
 		t.Errorf("stream not forced: %s", gotBody)
+	}
+}
+
+func TestChatAttributionHeadersDefaultAndLegacy(t *testing.T) {
+	a := &auth.Auth{AccessToken: "at", UID: "u1"}
+	capture := func(c *Client) http.Header {
+		req := httptest.NewRequest(http.MethodPost, "https://chat.example/v2/chat/completions", nil)
+		c.ChatHeaders(req, a, "", ChatMeta{})
+		return req.Header.Clone()
+	}
+
+	headers := capture(&Client{})
+	if got := headers.Get("X-Product"); got != "SaaS" {
+		t.Errorf("X-Product=%q want SaaS", got)
+	}
+	if got := headers.Get("X-IDE-Name"); got != "WorkBuddy" {
+		t.Errorf("X-IDE-Name=%q want WorkBuddy", got)
+	}
+	if got := headers.Get("X-IDE-Type"); got != "WorkBuddy" {
+		t.Errorf("X-IDE-Type=%q want WorkBuddy", got)
+	}
+	if got := headers.Get("X-IDE-Version"); got != defaultClientVersionCN {
+		t.Errorf("X-IDE-Version=%q want %q", got, defaultClientVersionCN)
+	}
+
+	// 显式 client_name=SaaS 保留旧行为：只保证 X-Product=SaaS，不注入 IDE 归属头。
+	legacy := capture(&Client{ClientName: "SaaS"})
+	if got := legacy.Get("X-Product"); got != "SaaS" {
+		t.Errorf("legacy X-Product=%q want SaaS", got)
+	}
+	if got := legacy.Get("X-IDE-Name"); got != "" {
+		t.Errorf("legacy X-IDE-Name=%q want empty", got)
+	}
+}
+
+func TestConversationHeadersScopeAndStability(t *testing.T) {
+	c := &Client{}
+	a := &auth.Auth{AccessToken: "at", UID: "u1"}
+	capture := func(meta ChatMeta) http.Header {
+		req := httptest.NewRequest(http.MethodPost, "https://chat.example/v2/chat/completions", nil)
+		c.ChatHeaders(req, a, "", meta)
+		return req.Header.Clone()
+	}
+	uuidV4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+	turn1a := capture(ChatMeta{ConversationID: "conv-1", ConversationRequestID: "turn-1"})
+	turn1b := capture(ChatMeta{ConversationID: "conv-1", ConversationRequestID: "turn-1"})
+	turn2 := capture(ChatMeta{ConversationID: "conv-1", ConversationRequestID: "turn-2"})
+	otherConv := capture(ChatMeta{ConversationID: "conv-2", ConversationRequestID: "conv-2:turn-1"})
+
+	if !uuidV4.MatchString(turn1a.Get("X-Conversation-ID")) {
+		t.Errorf("X-Conversation-ID=%q want UUID v4", turn1a.Get("X-Conversation-ID"))
+	}
+	if !hex32.MatchString(turn1a.Get("X-Conversation-Request-ID")) {
+		t.Errorf("X-Conversation-Request-ID=%q want 32 hex", turn1a.Get("X-Conversation-Request-ID"))
+	}
+	if turn1a.Get("X-Conversation-ID") != turn1b.Get("X-Conversation-ID") {
+		t.Errorf("same conversation key drifted: %q vs %q", turn1a.Get("X-Conversation-ID"), turn1b.Get("X-Conversation-ID"))
+	}
+	if turn1a.Get("X-Conversation-Request-ID") != turn1b.Get("X-Conversation-Request-ID") {
+		t.Errorf("same turn key drifted: %q vs %q", turn1a.Get("X-Conversation-Request-ID"), turn1b.Get("X-Conversation-Request-ID"))
+	}
+	if turn1a.Get("X-Conversation-Message-ID") == turn1b.Get("X-Conversation-Message-ID") {
+		t.Errorf("message ID should be fresh per outbound request: %q", turn1a.Get("X-Conversation-Message-ID"))
+	}
+	if turn1a.Get("X-Conversation-ID") != turn2.Get("X-Conversation-ID") {
+		t.Errorf("same conversation should keep conversation ID: %q vs %q", turn1a.Get("X-Conversation-ID"), turn2.Get("X-Conversation-ID"))
+	}
+	if turn1a.Get("X-Conversation-Request-ID") == turn2.Get("X-Conversation-Request-ID") {
+		t.Errorf("different turns should have different request IDs")
+	}
+	if turn1a.Get("X-Conversation-ID") == otherConv.Get("X-Conversation-ID") {
+		t.Errorf("different conversations should have different conversation IDs")
+	}
+	if turn1a.Get("X-Conversation-Request-ID") == otherConv.Get("X-Conversation-Request-ID") {
+		t.Errorf("same turn text in different conversations should have different request IDs")
 	}
 }
 

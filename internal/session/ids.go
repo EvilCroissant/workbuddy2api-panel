@@ -2,9 +2,9 @@
 //
 // 官方 CodeBuddy CLI 出站头族（X-Conversation-ID / X-Conversation-Request-ID /
 // X-Request-ID / X-B3-*），后台按 X-Conversation-Request-ID（对话轮）聚合请求；
-// 本文件提供 conversationId 提取、消息级 32 hex messageID、以及"同一会话键
-// 稳定复用"的 conversationRequestID 惰性缓存，供 handler 轮转循环外生成、循环内
-// 复用（换号/重试/降级全部同 ID → 后台不再碎片化）。
+// 本文件提供 conversationId 提取、会话级 UUID、轮级 32 hex requestID、消息级
+// 32 hex messageID，供 handler 轮转循环外生成、循环内复用（换号/重试/降级全部
+// 同 ID → 后台不再碎片化）。
 package session
 
 import (
@@ -65,15 +65,15 @@ func NewMessageID() string {
 }
 
 // NewUUID 生成 RFC 4122 UUID v4（36 字符带横线）。国际版 chat 的
-// X-Conversation-* 头要求三个值均为 UUID v4；crypto/rand 失败时仍由 randomIDBytes
+// X-Conversation-ID 会话级头使用 UUID；crypto/rand 失败时仍由 randomIDBytes
 // 的 math/rand/v2 兜底，保持格式恒合法。
 func NewUUID() string {
 	return formatUUIDv4(randomIDBytes())
 }
 
 // UUIDv4For 从任意稳定值派生 UUID v4：同一输入恒得同一 UUID，异输入相互独立。
-// 用于把现有 32 hex / 客户端会话键转换成上游可接受的会话头值，同时保留本地
-// issue #35 的轮转内聚合稳定性。空输入生成随机 UUID（无稳定键可复用）。
+// 用于把现有 32 hex / 客户端会话键转换成 X-Conversation-ID 可接受的会话级值，
+// 同时保留本地 issue #35 的轮转内聚合稳定性。空输入生成随机 UUID（无稳定键可复用）。
 func UUIDv4For(value string) string {
 	if value == "" {
 		return NewUUID()

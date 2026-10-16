@@ -644,15 +644,15 @@ type Client struct {
 	// （仅当 client_name 非空）。
 	UserAgent string
 
-	// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` + X-IDE-Version）。
-	// 空 = 内置默认（对齐官方 5.5.4 分发包）。
+	// ClientVersion WorkBuddy App 版本段（出站 UA 的 `WorkBuddy/<ver>` + X-IDE-Version）。
+	// 空 = 按 realm 内置默认（CN 5.8.2 / global 5.8.4）；非空时覆盖两端。
 	ClientVersion string
 
-	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认（官方内置 CLI 2.137.1）。
+	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认（官方内置 CLI 2.161.0）。
 	CliVersion string
 
-	// ClientName 用量归属头取值（X-Product / X-IDE-Name / X-IDE-Type / X-IDE-Version）。
-	// 空 = 旧行为：X-Product="SaaS"，不设 X-IDE-*（向后兼容，不突变归因）。
+	// ClientName 控制 X-IDE-Name/Type 的归属名（X-Product 固定 SaaS，不跟随本字段）。
+	// 空 = WorkBuddy；显式 "SaaS" = 保留旧行为（不设 X-IDE-*）。
 	ClientName string
 
 	// PassthroughIP 是否透传客户端 IP 给上游（X-Forwarded-For/X-Real-IP 首段）。
