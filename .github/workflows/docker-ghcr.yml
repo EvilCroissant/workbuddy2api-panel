@@ -38,6 +38,10 @@ jobs:
           fi
           echo "tag ${GITHUB_REF_NAME} 位于 develop，继续构建"
 
+      - name: Resolve app version
+        id: app-version
+        run: echo "value=${GITHUB_REF_NAME#v}-panel" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU（arm64 交叉模拟）
         uses: docker/setup-qemu-action@v3
 
@@ -71,6 +75,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.app-version.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # 关闭 provenance attestation：避免 ghcr 页面出现 unknown/unknown 架构条目
