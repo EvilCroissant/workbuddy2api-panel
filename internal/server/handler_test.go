@@ -926,6 +926,50 @@ func TestChatHTTP4xxClientDoesNotPenalize(t *testing.T) {
 	}
 }
 
+// TestChatModelForbiddenByAccountTypeReturns400 复现 global:gpt-5.6-sol 在免费账号上
+// 的 11158：网关应仅轮转 global 域、写 (账号,模型) 避让，最终返回明确的 400
+// model_unavailable，而不是被 CN 账号掩盖成 503 no_healthy_account。
+func TestChatModelForbiddenByAccountTypeReturns400(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 400, `{"code":11158,"msg":"model [gpt-5.6-sol] is not allowed for user type [personal_free_user]","requestId":"req-11158"}`, false
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "cn1", Domain: "www.codebuddy.cn", AccessToken: "at-cn", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "g1", Domain: "www.workbuddy.ai", AccessToken: "at-global", ExpiresAt: 9999999999},
+	)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"global:gpt-5.6-sol","messages":[]}`)))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code=%d want 400 body=%s", rec.Code, rec.Body)
+	}
+	if calls != 1 {
+		t.Fatalf("calls=%d want 1（只能尝试 global 账号，不能跨域轮转）", calls)
+	}
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad response JSON: %v body=%s", err, rec.Body)
+	}
+	if resp.Error.Code != "model_unavailable" {
+		t.Errorf("error.code=%q want model_unavailable", resp.Error.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "11158") {
+		t.Errorf("响应应透传上游 11158 原文: %q", resp.Error.Message)
+	}
+	if st := p.ModelBlockedForRealm("gpt-5.6-sol", "global"); !st.Blocked || st.Count != 1 {
+		t.Fatalf("global 账号应写入模型级避让: %+v", st)
+	}
+}
+
 func TestModelsEndpoint(t *testing.T) {
 	h := NewHandler(Config{Pool: testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at", ExpiresAt: 9999999999}), Upstream: upstream.New()})
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -1916,5 +1960,97 @@ func TestChatMarkupRepairStrictModeRejectsUndeclaredTool(t *testing.T) {
 	msg := resp["choices"].([]any)[0].(map[string]any)["message"].(map[string]any)
 	if _, ok := msg["tool_calls"]; ok {
 		t.Fatalf("未声明的工具名不得转换: %#v", msg["tool_calls"])
+	}
+}
+
+// TestChatHiddenModelRejected models.hidden 黑名单：点名调用直接 400 拒绝，
+// 不打上游、不占选号；未隐藏的模型照常放行。
+func TestChatHiddenModelRejected(t *testing.T) {
+	var calls int
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 200, sseOK, true
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, ModelsHidden: []string{"glm-5.2", "global:secret-model"}})
+
+	post := func(model string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		body := []byte(`{"model":"` + model + `","messages":[]}`)
+		h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body)))
+		return rec
+	}
+
+	// 裸名隐藏 → 裸名 / cn: / global: 三种写法都拒绝
+	for _, model := range []string{"glm-5.2", "cn:glm-5.2", "global:glm-5.2"} {
+		rec := post(model)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("model %q: code=%d, want 400", model, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "model_unavailable") {
+			t.Errorf("model %q: body=%s, want model_unavailable", model, rec.Body.String())
+		}
+	}
+	// 前缀精确隐藏：只藏 global 域
+	if rec := post("global:secret-model"); rec.Code != http.StatusBadRequest {
+		t.Errorf("global:secret-model: code=%d, want 400", rec.Code)
+	}
+	if calls != 0 {
+		t.Errorf("hidden models must not reach upstream: calls=%d", calls)
+	}
+
+	// cn:secret-model 不在黑名单 → 放行并打到上游
+	rec := post("cn:secret-model")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cn:secret-model: code=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	if calls != 1 {
+		t.Errorf("allowed model: upstream calls=%d, want 1", calls)
+	}
+}
+
+// TestModelsHiddenFiltered models.hidden 黑名单：/v1/models 列表里过滤掉隐藏模型。
+// 用包级 dynamicModelsCache 预置目录，避免联网拉取。
+func TestModelsHiddenFiltered(t *testing.T) {
+	dynamicModelsCache.Lock()
+	dynamicModelsCache.ids = []upstream.ModelInfo{{ID: "glm-5.2"}, {ID: "deepseek-v3"}}
+	dynamicModelsCache.fetched = time.Now()
+	dynamicModelsCache.Unlock()
+	defer func() {
+		dynamicModelsCache.Lock()
+		dynamicModelsCache.ids = nil
+		dynamicModelsCache.fetched = time.Time{}
+		dynamicModelsCache.lastFail = time.Time{}
+		dynamicModelsCache.Unlock()
+	}()
+
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 200, `{"data":[]}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, ModelsHidden: []string{"deepseek-v3"}})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/models", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode /v1/models: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, m := range resp.Data {
+		ids[m.ID] = true
+	}
+	if !ids["cn:glm-5.2"] {
+		t.Errorf("visible model missing from list: ids=%v", ids)
+	}
+	if ids["cn:deepseek-v3"] {
+		t.Errorf("hidden model leaked into /v1/models: ids=%v", ids)
 	}
 }
