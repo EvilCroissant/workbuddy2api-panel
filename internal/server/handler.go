@@ -942,6 +942,24 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
+			// 6021「queue.full.title」渠道级容量满载：**不罚号不轮转**，立即透传
+			// 上游原文回客户端（503 + upstream_busy）。上游集群排队打满时换任何
+			// 账号都撞同一堵墙——按限流处置会逐号软冷却，实测 2 秒绞杀整池健康号
+			// （2026-10-15 实案），且换号白撞把无效请求放大 MaxRotate 倍。客户端
+			// 按 SDK 退避重试即可；等待窗口过去渠道恢复即成功。
+			if kind == upstream.ErrUpstreamBusy {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				fail(acct.UID)
+				msg := string(respBody)
+				if strings.TrimSpace(msg) == "" {
+					msg = "upstream capacity is full (queue.full); retry after a short wait"
+				}
+				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", msg,
+					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
+				st.status = http.StatusServiceUnavailable
+				st.outcome = reqlog.OutcomeHTTPError
+				return
+			}
 			// lastErr 携带完整 body（uerr.Msg 在 upstream 侧截断 200 字符，透传语义
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
@@ -1151,6 +1169,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				code = "waf_ip_blocked"
 				msg = "waf ip-level block: upstream firewall is blocking the gateway IP, rotation stopped; retry after the block window expires"
 			}
+		case upstream.ErrUpstreamBusy:
+			// 6021 queue.full 渠道级容量满载（防御路径：正常已在轮转循环内
+			// fail-fast 拦截）。503 + 可重试语义——上游原文（下方统一透传）
+			// 含 requestId，客户端按 SDK 退避重试即可。
+			code = "upstream_busy"
+			msg = "upstream capacity is full (queue.full); retry after a short wait"
 		case upstream.ErrModelBlocked:
 			// 11102「该后端无此模型」：上游原文（下方统一透传）已经写清了原因，但
 			// code 此前停在默认的 no_healthy_account —— 那是"服务端过载"的语义，
@@ -1383,16 +1407,24 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 偶发路径缺失不是限流信号，不该按限流惩罚升级。
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, notFoundCooldown, "upstream 404")
 	case upstream.ErrAccountFault:
-		// 账号级授权/配额故障按 msg 分野（口径与 Classify 的 accountFaultMarkers 一致）：
-		//   - "request illegal"（code 11140）→ 账号级**授权封禁**：硬禁用（Disable）。
+		// 账号级授权/配额故障按业务码分野（口径与 Classify 一致）：
+		//   - 11140 + "request illegal" → 账号被上游限制（异常行为/风控）：硬禁用。
+		//     解除只能由用户在 WorkBuddy 官方渠道申诉，重登无效（issue 1849 结论）。
 		//   - 14017（trial not activated）→ register 未完成，补完 register 后可能自愈，
 		//     **保持软冷却**（禁用会让用户补完 register 后仍无法用）。
-		// 大小写不敏感（与 Classify 的 marker 匹配同口径）。
-		if strings.Contains(strings.ToLower(body), "request illegal") {
-			h.cfg.Pool.Disable(uid, "account banned by upstream (11140 request illegal), re-login required")
+		// 注意 11128 的 msg 同为 "request illegal"，但那是通道校验失败，已在
+		// Classify 分流到 ErrChannelRefused，走不到这里。
+		if upstream.IsAccountRestricted(body) {
+			h.cfg.Pool.Disable(uid, "account restricted by upstream (11140 request illegal); appeal in WorkBuddy (submit feedback) to lift the restriction")
 			return
 		}
 		h.cfg.Pool.Cooldown(uid, pool.CoolSoft, h.softCooldown(), "account fault (14017)")
+	case upstream.ErrChannelRefused:
+		// 11128 通道校验失败（上游判定请求可能不是官方客户端发出，displayMsg 就是
+		// 「请求被拦截，请重新发送」）。账号本身健康——官方客户端可正常使用同一账号，
+		// 这不是账号级故障，**不罚账号**（无冷却/熔断/NoteFailures）。与
+		// ErrContentBlocked 同待遇，由轮转继续尝试（换号不改变通道指纹，若全池同错
+		// 会把上游原文透传给客户端，提示排查客户端指纹）。
 	case upstream.ErrServer:
 		// 5xx 上游故障：Classify 已把 ≥500 判为 ErrServer，在此喂熔断计数（不再手写 status>=500）。
 		h.cfg.Pool.NoteError(uid)
@@ -1412,6 +1444,11 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 不罚账号（无冷却/熔断/NoteError，同 ErrContentBlocked 待遇）；chatCompletions
 		// 已 fail-fast 400 透传原文、终止轮转——「换号可能有不同模型权限」属 11102
 		// （ErrModelBlocked）的分类域，与本类无关。
+	case upstream.ErrUpstreamBusy:
+		// 6021「queue.full.title」渠道级容量满载：账号余额健康、未限流、session 未死，
+		// 换号也撞同一堵墙。零动作（不冷却/不熔断/不 NoteError/不喂连败，同
+		// ErrContentBlocked 待遇）；chatCompletions 已 fail-fast 503 透传原文、
+		// 终止轮转——该分支只为文档完备。
 	case upstream.ErrModelBlocked:
 		// 11102「该后端无此模型」：(账号, 模型) 负缓存避让。复用 modelCooldowns 机制
 		// （与 6004 同域），选号侧 healthyForModel 对该账号自动避开该模型。

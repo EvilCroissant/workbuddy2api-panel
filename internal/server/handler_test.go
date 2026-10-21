@@ -167,6 +167,49 @@ func TestChatBadParamsFailsFastWithoutPenalty(t *testing.T) {
 	}
 }
 
+// TestChatQueueFullFailsFastWithoutPenalty 上游 429 + code 6021「queue.full.title」
+// 是渠道级容量满载（推理集群排队打满），**不是账号问题**（2026-10-15 实案：按
+// 限流逐号软冷却，2 秒绞杀整池健康号）。端到端断言：不轮转（只打一次上游）、
+// 直接回 503 + upstream_busy（可重试语义）、账号零惩罚（无冷却/无熔断/无连败）。
+func TestChatQueueFullFailsFastWithoutPenalty(t *testing.T) {
+	calls := map[string]int{}
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls[authz]++
+		return 429, `{"code":6021,"msg":"queue.full.title","requestId":"b1bc87ea3a771e835e388328713d47cf"}`, false
+	})
+	p := testPoolWith(
+		&auth.Auth{UID: "busy1", AccessToken: "at-busy1", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "busy2", AccessToken: "at-busy2", ExpiresAt: 9999999999},
+	)
+	p.SetCredits("busy1", 2000, 0) // 确定性源 r=0 → 先选 busy1
+	p.SetCredits("busy2", 1000, 0)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code=%d body=%s (want 503: channel-level busy, client should back off and retry)", rec.Code, rec.Body)
+	}
+	if calls["Bearer at-busy1"] != 1 || calls["Bearer at-busy2"] != 0 {
+		t.Errorf("calls=%v want busy1 1 次、busy2 0 次（零轮转）", calls)
+	}
+	// 账号完好：无冷却、无熔断计数、无连败降权。
+	st, _ := p.Status("busy1")
+	if st.Cooling || st.Disabled || st.ErrTotal != 0 || st.BreakerFails != 0 {
+		t.Errorf("ErrUpstreamBusy must not penalize account: %+v", st)
+	}
+	// 响应体：上游原文透传（requestId 在场）+ upstream_busy code。
+	body := rec.Body.String()
+	if !strings.Contains(body, "6021") || !strings.Contains(body, "queue.full.title") {
+		t.Errorf("503 message should carry upstream 6021 info: %s", body)
+	}
+	if !strings.Contains(body, "upstream_busy") {
+		t.Errorf("503 body should carry upstream_busy code: %s", body)
+	}
+	if strings.Contains(body, "no_healthy_account") {
+		t.Errorf("channel-busy failure must not be reported as account exhaustion: %s", body)
+	}
+}
+
 // TestChatBadParams400CarriesUpstreamBody 11101 的 400 响应必须包含上游原始
 // 11101 信息（含 requestId，客户端据此排查），且不再出现空洞的 no_healthy_account。
 func TestChatBadParams400CarriesUpstreamBody(t *testing.T) {
@@ -441,6 +484,49 @@ func TestApplyErrorPolicyNotFoundUsesFixedBase(t *testing.T) {
 			t.Errorf("call %d: 404 cool_remaining_sec=%d want ~%d（固定基数 %ds，非 soft_rate）",
 				i, st.CoolRemaining, notFoundSec, notFoundSec)
 		}
+	}
+}
+
+// TestApplyErrorPolicyChannelRefusedDoesNotDisable 11128 与 11140 的 msg 同为
+// "request illegal"，但语义相反：
+//   - 11128 通道校验失败 → 账号健康（官方客户端可正常使用），不得禁用/冷却；
+//   - 11140 账号被上游限制 → 硬禁用，等用户在 WorkBuddy 申诉解除；
+//   - 11140 的模型级限流变体 → 仍是软限流，不能误禁用。
+//
+// 回归点：只看文案的旧实现会把 11128 判成账号封禁，硬禁用健康账号（issue 1849
+// 同款误伤：用户官方客户端能用，面板里却被标成 banned）。
+func TestApplyErrorPolicyChannelRefusedDoesNotDisable(t *testing.T) {
+	cases := []struct {
+		name         string
+		body         string
+		kind         upstream.ErrKind
+		wantDisabled bool
+		wantCooling  bool
+	}{
+		{"11128 channel refused", `{"code":"11-128","msg":"request illegal","displayTips":{"en":"This call failed channel verification, possibly because it was not sent from an official client."}}`, upstream.ErrChannelRefused, false, false},
+		{"11140 account restricted", `{"code":11140,"msg":"request illegal"}`, upstream.ErrAccountFault, true, false},
+		{"11140 rate-limiting variant", `{"code":11140,"msg":"The model provider is rate-limiting requests."}`, upstream.ErrSoftRate, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := upstream.Classify(400, tc.body); got != tc.kind {
+				t.Fatalf("Classify=%v want %v", got, tc.kind)
+			}
+			p := pool.New("")
+			p.Add(&auth.Auth{UID: "u1"})
+			h := NewHandler(Config{Pool: p})
+			h.applyErrorPolicy("u1", tc.kind, tc.body, "glm-5.2", nil)
+			st, _ := p.Status("u1")
+			if st.Disabled != tc.wantDisabled {
+				t.Errorf("disabled=%v want %v (%+v)", st.Disabled, tc.wantDisabled, st)
+			}
+			if st.Cooling != tc.wantCooling {
+				t.Errorf("cooling=%v want %v (%+v)", st.Cooling, tc.wantCooling, st)
+			}
+			if !tc.wantDisabled && st.ErrTotal != 0 {
+				t.Errorf("不罚号路径不应累计错误计数: err_total=%d", st.ErrTotal)
+			}
+		})
 	}
 }
 
@@ -1359,7 +1445,7 @@ func TestContentBlockedTriggersDegradedRetry(t *testing.T) {
 				return &http.Response{
 					StatusCode: 400,
 					Header:     http.Header{"Content-Type": []string{"application/json"}},
-					Body:       io.NopCloser(strings.NewReader(`{"code":11128,"msg":"blocked by security policy"}`)),
+					Body:       io.NopCloser(strings.NewReader(`{"code":"11-128","msg":"blocked by security policy"}`)),
 				}, nil
 			}
 			return &http.Response{
@@ -1398,7 +1484,7 @@ func TestContentBlockedStickyDegraded(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
 		if !firstCall {
 			firstCall = true
-			return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
+			return 400, `{"code":"11-128","msg":"blocked by security policy"}`, false
 		}
 		return 200, sseOK, true
 	})
@@ -1425,7 +1511,7 @@ func TestContentBlockedStickyDegraded(t *testing.T) {
 // 400 content_blocked 防火墙文案（不轮转、不暴露账号/上游错误码）。
 func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
-		return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
+		return 400, `{"code":"11-128","msg":"blocked by security policy"}`, false
 	})
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	h := NewHandler(Config{Pool: p, Upstream: up, PromptMode: "custom", PromptText: "SYS"})
@@ -1450,7 +1536,7 @@ func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 	}
 	// 错误透传（error-passthrough，吸收上游 5755fe3）：message 装上游 body 原文
 	// （code/msg 原样），客户端必须看到真实错误才能排查；gateway_hint 并列补充。
-	if !strings.Contains(rec.Body.String(), "11128") {
+	if !strings.Contains(rec.Body.String(), "11-128") {
 		t.Errorf("message should carry upstream original body (passthrough): %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "gateway_hint") {
@@ -1464,7 +1550,7 @@ func TestContentBlockedCustomModeDoesNotDegrade(t *testing.T) {
 // TestContentBlockedDoesNotPenalizeAccount ErrContentBlocked 不罚账号（无冷却/熔断/NoteError）。
 func TestContentBlockedDoesNotPenalizeAccount(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
-		return 400, `{"code":11128,"msg":"blocked by security policy"}`, false
+		return 400, `{"code":"11-128","msg":"blocked by security policy"}`, false
 	})
 	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
 	// 熔断阈值 1：若误罚 NoteError 一次即熔断；content_blocked 不应喂熔断。
