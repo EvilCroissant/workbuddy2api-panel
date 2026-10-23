@@ -2,7 +2,10 @@
 FROM golang:1.23-alpine AS build
 WORKDIR /src
 COPY go.mod ./
-RUN go mod download
+# 防止因为直接使用官方源导致下载失败
+RUN go env -w GOPROXY=https://goproxy.cn,direct && \
+    go env GOPROXY && \
+    go mod download
 COPY . .
 # APP_VERSION 由 CI 按 tag 注入；本地直接构建时保留源码默认值。
 ARG APP_VERSION=1.13.0.1-panel

@@ -5,6 +5,7 @@ package upstream
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -133,8 +134,8 @@ func (c *Client) injectDeviceToken(req *http.Request, a *auth.Auth) {
 }
 
 // deriveAccountStableID 按 uid + 用途盐稳定派生 36 hex 设备/会话标识。
-// 跨重启稳定（固定盐 "wb2a:"，不随进程换——这是与 session 包派生盐的本质差异：
-// 那是会话键维度的进程级随机盐，重启换新；本函数是账号维度，必须跨重启恒定）、
+// 跨重启稳定（固定盐 "wb2a:"；与 session 包的进程内轮次映射不同，账号级值
+// 在轮次缓存淘汰、过期或进程重启后也保持一致）、
 // 账号间互异（uid 不同则不同）、同 uid 同用途恒同值（幂等）。用 sha256 与项目
 // 既有派生（session/ids.go、cache_key.go）保持一致；截 36 hex 提供更长熵。
 //
@@ -197,14 +198,16 @@ func (c *Client) injectCodeBuddyRequest(req *http.Request) {
 }
 
 // ChatMeta 一次 chat 出站的会话头族元数据（issue #35：后台按 X-Conversation-Request-ID
-// 聚合请求，官方客户端一次 user send 内所有 tool call/重试/换号复用同一个 ID）。
+// 聚合请求，网关同一轮的工具续调/重试/轮转复用轮次 ID）。
 // handler 在轮转循环外生成 conversationID / conversationRequestID，循环内每次出站
 // 复用同值；TraceID 透传入站值（空 = 回落 conversationRequestID）。
-// messageID（消息级，每条独立）由 ChatHeaders 内部生成，无需外部可见。
+// MessageID / SpanID 在一次模型调用开始时捕获，HTTP 重试复用。
 type ChatMeta struct {
 	ConversationID        string // X-Conversation-ID 的本地会话键；非空稳定派生 UUID v4，空则随机
-	ConversationRequestID string // X-Conversation-Request-ID / X-Root-Request-ID 的轮级键；输出规范为 32 hex
+	ConversationRequestID string // X-Conversation-Request-ID / X-Root-Request-ID；输出为去横线 UUIDv7
 	TraceID               string // X-Trace-ID：入站透传值，空则回落 conversationRequestID
+	MessageID             string // 同一次模型调用的消息 ID；空则生成去横线 UUIDv7
+	SpanID                string // 同一次模型调用的独立 64 位 span ID
 }
 
 // ChatHeaders 在 common 之上加 chat 专属的账号头。
@@ -275,23 +278,24 @@ func (c *Client) injectGlobalChatHeaders(req *http.Request, a *auth.Auth) {
 // 头族分四层，各司其职：
 //   - X-Conversation-ID：会话级，必发。本地会话键经 UUIDv4For 稳定转换；无会话键时
 //     随机生成，避免把空值直接发给上游。
-//   - X-Conversation-Request-ID：**对话轮级聚合主键**，必发，恒为 32 hex。一次
+//   - X-Conversation-Request-ID：**对话轮级聚合主键**，必发，为去横线 UUIDv7。一次
 //     user send 内的所有 tool call/重试/换号/降级复用同一个 → 后台按它聚合成一条。
-//   - X-Conversation-Message-ID：消息级，每次出站新建 32 hex；与 X-Request-ID 完全
-//     相同，对齐官方主请求的字段关系。
+//   - X-Conversation-Message-ID：每次独立模型调用新建去横线 UUIDv7；同一次调用的
+//     HTTP 重试复用，与 X-Request-ID 完全相同。
 //   - X-Root-Request-ID：= X-Conversation-Request-ID（根请求追踪）。
 //   - X-Trace-ID：入站透传或 = conversationRequestID。
 //   - X-B3-TraceId / X-B3-SpanId / X-B3-Sampled：链路族。B3 规范只认 16/32 hex
-//     TraceId 与 16 hex SpanId；TraceId 取轮级 ID，SpanId 取 messageID[:16]（每消息新）。
+//     TraceId 与 16 hex SpanId；保留网关轮级 trace，span ID 独立生成。
 func (c *Client) injectConversationHeaders(req *http.Request, meta ChatMeta) {
-	convReqID := normalizeConversationRequestID(meta.ConversationRequestID)
+	meta = meta.withMessageIDs()
+	convReqID := meta.ConversationRequestID
 	conversationID := meta.ConversationID
 	if conversationID == "" {
 		// 无会话键时用轮级 ID 作为兜底会话键，保证同一轮的重试/换号不会漂移。
 		conversationID = convReqID
 	}
 	conversationID = session.UUIDv4For("conversation:" + conversationID)
-	messageID := session.NewMessageID()
+	messageID := meta.MessageID
 	req.Header.Set("X-Conversation-ID", conversationID)
 	req.Header.Set("X-Conversation-Request-ID", convReqID)
 	req.Header.Set("X-Conversation-Message-ID", messageID)
@@ -307,22 +311,33 @@ func (c *Client) injectConversationHeaders(req *http.Request, meta ChatMeta) {
 		b3Trace = messageID // 非法 B3 TraceId → 回落恒 32 hex 的消息级 ID
 	}
 	req.Header.Set("X-B3-TraceId", b3Trace)
-	req.Header.Set("X-B3-SpanId", messageID[:16])
+	req.Header.Set("X-B3-SpanId", meta.SpanID)
 	req.Header.Set("X-B3-Sampled", "1")
 }
 
-// normalizeConversationRequestID 把轮级聚合键规范为 32 hex。
-// 已是 32 hex 的调用方值（handler 的 TurnRequestID / RequestIDForKey）原样保留；
-// UUID 去掉横线后保留；其他任意形态稳定派生，避免把客户端原始字符串直接带到上游。
-func normalizeConversationRequestID(value string) string {
+// normalizeConversationRequestID 保留合法 UUIDv7；其他入站标识按会话隔离，
+// 映射到有容量与空闲过期上限的 UUIDv7 缓存，不向上游发送原始任意字符串。
+func normalizeConversationRequestID(value, conversationID string) string {
 	if value == "" {
 		return session.NewMessageID()
 	}
-	compact := strings.ReplaceAll(value, "-", "")
-	if len(compact) == 32 && validTraceID(compact) {
-		return strings.ToLower(compact)
+	if compact, ok := session.CompactUUIDv7(value); ok {
+		return compact
 	}
-	return strings.ReplaceAll(session.UUIDv4For("request:"+value), "-", "")
+	return session.TurnRequestID(fmt.Sprintf("incoming:%d:%s%s", len(conversationID), conversationID, value))
+}
+
+func (meta ChatMeta) withMessageIDs() ChatMeta {
+	meta.ConversationRequestID = normalizeConversationRequestID(meta.ConversationRequestID, meta.ConversationID)
+	if id, ok := session.CompactUUIDv7(meta.MessageID); ok {
+		meta.MessageID = id
+	} else {
+		meta.MessageID = session.NewMessageID()
+	}
+	if len(meta.SpanID) != 16 || !validTraceID(meta.SpanID) || meta.SpanID == "0000000000000000" {
+		meta.SpanID = session.NewSpanID()
+	}
+	return meta
 }
 
 // validTraceID 判断 B3 TraceId 是否合法：16 或 32 位 hex（大小写均可）。

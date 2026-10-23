@@ -2,10 +2,13 @@ package session
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 var uuidV4RE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -54,6 +57,9 @@ func TestResolveConversationID(t *testing.T) {
 func TestNewMessageIDFormat(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		id := NewMessageID()
+		if _, ok := CompactUUIDv7(id); !ok {
+			t.Fatalf("NewMessageID() = %q, want UUIDv7", id)
+		}
 		if len(id) != 32 {
 			t.Fatalf("NewMessageID() = %q len=%d want 32", id, len(id))
 		}
@@ -142,8 +148,7 @@ func TestTurnKeyExtraction(t *testing.T) {
 	}
 }
 
-// TestTurnRequestIDDerivation 轮级 ID 是纯派生：同键恒同值、异键异值、空键每次新值、
-// 形态恒 32 hex。
+// 同一存活轮级映射稳定，异键独立，空键新建，输出为去横线 UUIDv7。
 func TestTurnRequestIDDerivation(t *testing.T) {
 	a1 := TurnRequestID("u0:同一个问题")
 	a2 := TurnRequestID("u0:同一个问题")
@@ -162,8 +167,89 @@ func TestTurnRequestIDDerivation(t *testing.T) {
 		t.Errorf("empty turn key should yield fresh values each call: %q", e1)
 	}
 	for _, id := range []string{a1, TurnRequestID(""), TurnRequestID("x")} {
-		if len(id) != 32 {
-			t.Errorf("TurnRequestID value %q len=%d want 32", id, len(id))
+		if _, ok := CompactUUIDv7(id); !ok {
+			t.Errorf("TurnRequestID value %q want UUIDv7", id)
 		}
+	}
+}
+
+func TestUUIDv7TimestampAndValidation(t *testing.T) {
+	now := time.UnixMilli(1792710000123)
+	id := newUUIDv7(now)
+	raw, err := hex.DecodeString(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.BigEndian.Uint64(append([]byte{0, 0}, raw[:6]...)); got != uint64(now.UnixMilli()) {
+		t.Fatalf("UUIDv7 timestamp=%d want %d", got, now.UnixMilli())
+	}
+	hyphenated := id[:8] + "-" + id[8:12] + "-" + id[12:16] + "-" + id[16:20] + "-" + id[20:]
+	for _, value := range []string{id, hyphenated, strings.ToUpper(hyphenated)} {
+		if got, ok := CompactUUIDv7(value); !ok || got != id {
+			t.Errorf("CompactUUIDv7(%q)=%q,%v", value, got, ok)
+		}
+	}
+	for _, value := range []string{"", NewUUID(), id[:16] + "0" + id[17:], id[:12] + "4" + id[13:], "-" + id, id[:31] + "z"} {
+		if _, ok := CompactUUIDv7(value); ok {
+			t.Errorf("invalid UUIDv7 accepted: %q", value)
+		}
+	}
+}
+
+func TestRequestIDCacheEvictionAndIdleExpiry(t *testing.T) {
+	c := newRequestIDCache(2, time.Minute)
+	now := time.Unix(1700000000, 0)
+	a := c.get("turn", "a", now)
+	b := c.get("turn", "b", now.Add(time.Second))
+	if got := c.get("turn", "a", now.Add(2*time.Second)); got != a {
+		t.Fatal("cache hit changed ID")
+	}
+	c.get("turn", "c", now.Add(3*time.Second))
+	if got := c.get("turn", "a", now.Add(4*time.Second)); got != a {
+		t.Fatal("recently used entry was evicted")
+	}
+	if got := c.get("turn", "b", now.Add(5*time.Second)); got == b {
+		t.Fatal("least recently used entry was retained")
+	}
+	if len(c.entries) != 2 || c.lru.Len() != 2 {
+		t.Fatal("cache capacity exceeded")
+	}
+	if got := c.get("turn", "a", now.Add(64*time.Second)); got == a {
+		t.Fatal("entry survived its full idle TTL")
+	}
+	if len(c.entries) != 2 {
+		t.Fatal("unexpired entries should survive another entry's expiry")
+	}
+	c.get("turn", "d", now.Add(3*time.Minute))
+	if len(c.entries) != 1 || c.lru.Len() != 1 {
+		t.Fatal("expired entries were not collected")
+	}
+}
+
+func TestRequestIDCacheConcurrentScopes(t *testing.T) {
+	c := newRequestIDCache(100, time.Minute)
+	now := time.Now()
+	ids := make(chan string, 64)
+	var wg sync.WaitGroup
+	for i := 0; i < cap(ids); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ids <- c.get("turn", "same", now)
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	want := c.get("turn", "same", now)
+	for id := range ids {
+		if id != want {
+			t.Fatal("concurrent creation split one turn into multiple IDs")
+		}
+	}
+	if c.get("session", "same", now) == want {
+		t.Fatal("session fallback and turn namespaces collided")
+	}
+	if c.get("turn", "", now) == c.get("turn", "", now) {
+		t.Fatal("empty keys must not be cached")
 	}
 }
