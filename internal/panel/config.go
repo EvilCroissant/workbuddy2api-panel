@@ -6,6 +6,7 @@
 package panel
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -32,6 +33,8 @@ func (p *Panel) getConfig(w http.ResponseWriter, r *http.Request) {
 // saveConfig 保存配置：body 直接是配置 JSON（前端按 schema 组装完整对象）。
 // SaveConfig 闭包内部完成校验+落盘+热应用；校验失败返回 400 且不写盘。
 func (p *Panel) saveConfig(w http.ResponseWriter, r *http.Request) {
+	p.keyMu.Lock()
+	defer p.keyMu.Unlock()
 	if p.cfg.SaveConfig == nil {
 		writeErr(w, http.StatusNotImplemented, "config api not available")
 		return
@@ -40,6 +43,16 @@ func (p *Panel) saveConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "read body: "+err.Error())
 		return
+	}
+	var incoming map[string]json.RawMessage
+	if json.Unmarshal(raw, &incoming) == nil && p.cfg.Keys.HasKeys() {
+		if value, ok := incoming["api_key"]; ok {
+			var key string
+			if json.Unmarshal(value, &key) == nil && key == "" {
+				writeErr(w, http.StatusBadRequest, "存在分发 Key，请保留管理员密钥；如需关闭鉴权，先删除所有分发 Key")
+				return
+			}
+		}
 	}
 	restartRequired, err := p.cfg.SaveConfig(raw)
 	if err != nil {

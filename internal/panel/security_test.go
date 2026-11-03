@@ -18,6 +18,7 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 	paths := []struct{ method, path string }{
 		{"GET", "/panel/"},
 		{"GET", "/panel/app.js"},
+		{"GET", "/panel/console.css"},
 		{"GET", "/panel/api/overview"}, // 401（未提供 key）
 		{"POST", "/panel/api/config"},  // 401
 		{"GET", "/panel/api/nonexistent"},
@@ -92,6 +93,18 @@ func TestAppScriptServed(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "'use strict'") {
 		t.Error("app.js body looks wrong")
+	}
+}
+
+func TestConsoleStylesServed(t *testing.T) {
+	p := newTestPanel()
+	w := httptest.NewRecorder()
+	p.ServeHTTP(w, httptest.NewRequest("GET", "/panel/console.css", nil))
+	if w.Code != 200 || !strings.Contains(w.Header().Get("Content-Type"), "text/css") || !strings.Contains(w.Body.String(), ".key-summary") {
+		t.Fatalf("console stylesheet missing: %d %s", w.Code, w.Header().Get("Content-Type"))
+	}
+	if !strings.Contains(string(indexHTML), `<link rel="stylesheet" href="console.css">`) {
+		t.Fatal("console stylesheet not linked")
 	}
 }
 

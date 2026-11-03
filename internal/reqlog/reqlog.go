@@ -64,6 +64,7 @@ type Config struct {
 type Event struct {
 	Time             time.Time `json:"time"`
 	RequestID        string    `json:"request_id"`
+	KeyID            string    `json:"key_id,omitempty"` // public distributed-key ID, never a credential
 	Path             string    `json:"path"`
 	Account          string    `json:"account,omitempty"`
 	Model            string    `json:"model,omitempty"`
@@ -76,14 +77,15 @@ type Event struct {
 	PromptTokens     int64     `json:"prompt_tokens,omitempty"`
 	CompletionTokens int64     `json:"completion_tokens,omitempty"`
 	TotalTokens      int64     `json:"total_tokens,omitempty"`
+	TokenKnown       bool      `json:"token_known"`
 	Credit           float64   `json:"credit,omitempty"`
 	HasCredit        bool      `json:"credit_known"`
 	// CacheHitTokens / CacheMissTokens 上游前缀缓存命中/未命中 token（issue #92）。
 	// 上游未回该维度时两者皆零值省略；hit=0 + miss>0 即整段未命中。
-	CacheHitTokens  int64 `json:"cache_hit_tokens,omitempty"`
-	CacheMissTokens int64 `json:"cache_miss_tokens,omitempty"`
-	ClientIP         string    `json:"client_ip,omitempty"`
-	UserAgent        string    `json:"user_agent,omitempty"`
+	CacheHitTokens  int64  `json:"cache_hit_tokens,omitempty"`
+	CacheMissTokens int64  `json:"cache_miss_tokens,omitempty"`
+	ClientIP        string `json:"client_ip,omitempty"`
+	UserAgent       string `json:"user_agent,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

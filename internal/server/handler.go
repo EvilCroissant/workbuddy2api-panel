@@ -18,6 +18,7 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/keyusage"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
@@ -32,8 +33,9 @@ import (
 type Config struct {
 	Pool      *pool.Pool
 	Upstream  *upstream.Client
-	APIKey    string // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
-	MaxRotate int    // 单请求最多换号次数，默认 3
+	APIKey    string             // 空 = 不鉴权（静态值；与 Live 同时给出时 Live 优先）
+	Keys      *httpauth.KeyStore // 可分发的 API Key；不授予面板或 /status 权限
+	MaxRotate int                // 单请求最多换号次数，默认 3
 	// Session 会话粘性路由器（可选；nil = 关闭粘性，纯 Pick 轮换）。
 	Session *session.Router
 	// StickyCount 返回当前粘性会话绑定数（供 /status）；nil 时报告 0。
@@ -44,7 +46,7 @@ type Config struct {
 	RefreshSkew  time.Duration // token 提前刷新窗口，默认 10m
 
 	// Panel 管理面板 handler（可选；nil = 不挂载）。挂载在 /panel/ 前缀下，
-	// 面板自带 Bearer 鉴权（同一 api_key）与内嵌静态资源，主路由只做转发。
+	// 面板自带管理员 Bearer 鉴权与内嵌静态资源，主路由只做转发。
 	Panel http.Handler
 
 	// Live 运行期可变配置（面板在线改 api_key / soft_rate / 脱敏开关时立即生效）。
@@ -70,6 +72,8 @@ type Config struct {
 	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
 	// 且与 pool 的每账号累计器同源，两条口径不会漂移。
 	Usage *usage.Recorder
+	// KeyUsage records final client requests independently of optional request-log archiving.
+	KeyUsage *keyusage.Recorder
 
 	// RequestLog 请求指标与脱敏 JSONL 归档（可选；nil = 不记录）。
 	RequestLog *reqlog.Recorder
@@ -154,7 +158,7 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.cfg.RequestLog != nil && h.tracedRequest(r) {
+	if (h.cfg.RequestLog != nil || h.cfg.KeyUsage != nil) && h.tracedRequest(r) {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now(), path: r.URL.Path}
 		if isSearchPath(r.URL.Path) {
 			// 搜索不是模型调用，但面板「模型」列空着无法区分这类流量；
@@ -167,15 +171,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(context.WithValue(r.Context(), requestTraceKey{}, trace))
 		obs := &responseObserver{ResponseWriter: w}
 		w.Header().Set("X-Request-Id", trace.id)
-		h.cfg.RequestLog.Begin()
+		if h.cfg.RequestLog != nil {
+			h.cfg.RequestLog.Begin()
+		}
+		completed := false
 		defer func() {
 			status := obs.status
 			if status == 0 {
 				status = http.StatusOK
 			}
-			h.cfg.RequestLog.Record(trace.event(status))
+			event := trace.event(status)
+			if !completed {
+				event.Status, event.OK, event.Outcome = http.StatusInternalServerError, false, reqlog.OutcomeHTTPError
+			}
+			if h.cfg.RequestLog != nil {
+				h.cfg.RequestLog.Record(event)
+			}
+			h.cfg.KeyUsage.Record(event)
 		}()
 		h.mux.ServeHTTP(obs, r)
+		completed = true
 		return
 	}
 	h.mux.ServeHTTP(w, r)
@@ -200,7 +215,20 @@ func isSearchPath(path string) bool {
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyBearer(r, h.loadLive().APIKey) {
+		key := h.loadLive().APIKey
+		valid := false
+		if r.URL.Path == "/status" {
+			valid = httpauth.VerifyAdmin(r, key, h.cfg.Keys)
+		} else {
+			var id string
+			id, valid = httpauth.IdentifyAPI(r, key, h.cfg.Keys)
+			if valid {
+				if tr := requestTraceFrom(r); tr != nil {
+					tr.keyID = id
+				}
+			}
+		}
+		if !valid {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
 		}
@@ -679,6 +707,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 靠顺序传递会让将来重排代码时静默把速率算回旧的错口径。
 	recordAttempt := func(uid string, delta pool.TokenUsageDelta, credit float64, hasCredit bool, started time.Time, ttfb time.Duration) {
 		st.attempts++
+		st.hasTokens = st.hasTokens || delta.HasPromptTokens || delta.HasCompletionTokens || delta.HasTotalTokens
 		if delta.HasPromptTokens {
 			st.promptTokens = delta.PromptTokens
 		}

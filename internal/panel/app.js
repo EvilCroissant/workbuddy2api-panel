@@ -22,6 +22,22 @@ let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
 let usageData = null;
 let reqRangeState = null; // 请求记录的时间范围（用量页的见 trangeState）
+let distributedKeys = [];
+let keyListState = { q: '', status: '', page: 1, size: 20 };
+let keyUsageState = {
+  hours: '0',
+  available: false,
+  usage: {},
+  detailUpdatedAt: 0,
+  expandedId: '',
+  detailKeyId: '',
+  detail: null,
+  detailError: '',
+  detailLoading: false,
+  rangeLoading: false,
+};
+let keyViewEpoch = 0, keyListSeq = 0, keyDetailSeq = 0, keyRefreshTimer = null;
+let keyListLoading = false;
 
 const $ = id => document.getElementById(id);
 
@@ -342,6 +358,7 @@ $('btnKey').onclick = async () => {
     $('keyErr').hidden = true;
     $('keyVeil').classList.remove('on');
     start();
+    go(view); // 直接打开密钥/配置页后登录，重新加载当前页的数据与按钮状态。
   } catch (e) { $('keyErr').hidden = false; }
 };
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
@@ -355,14 +372,27 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API 密钥', config: '配置', logs: '运行日志' };
 function go(v) {
+  if (v !== 'keys') {
+    invalidateKeyView();
+    dismissCreatedKey();
+    $('keyComposer').hidden = true;
+  }
+  $('btnAdd').hidden = v === 'keys';
+  $('btnRefresh').hidden = v === 'keys';
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
   $('ttl').textContent = TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
+  if (v === 'keys') {
+    keyViewEpoch++;
+    startKeyRefresh();
+    loadKeys();
+    if (keyUsageState.expandedId) loadKeyUsage(keyUsageState.expandedId);
+  }
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
@@ -1304,6 +1334,534 @@ $('cfgForm').onsubmit = async ev => {
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
   finally { btn.disabled = false; btn.textContent = '保存配置'; }
 };
+
+/* ── 分发 Key ─────────────────────────────────────────────────────── */
+const KEY_USAGE_RANGES = [
+  ['24', '24h'],
+  ['168', '7d'],
+  ['720', '30d'],
+  ['0', '累计'],
+];
+const KEY_REFRESH_MS = 15000;
+
+function dismissCreatedKey() {
+  $('keySecret').value = '';
+  $('keyCreated').hidden = true;
+}
+
+function stopKeyRefresh() {
+  if (keyRefreshTimer != null) clearInterval(keyRefreshTimer);
+  keyRefreshTimer = null;
+}
+
+function invalidateKeyView() {
+  keyViewEpoch++;
+  keyListSeq++;
+  keyDetailSeq++;
+  keyListLoading = false;
+  keyUsageState.detailLoading = false;
+  keyUsageState.rangeLoading = false;
+  keyUsageState.detail = null;
+  keyUsageState.detailError = '';
+  keyUsageState.detailUpdatedAt = 0;
+  stopKeyRefresh();
+}
+
+function startKeyRefresh() {
+  stopKeyRefresh();
+  keyRefreshTimer = setInterval(() => {
+    if (view === 'keys' && !document.hidden) refreshKeys(true);
+  }, KEY_REFRESH_MS);
+}
+
+function keyRangeLabel(hours) {
+  const row = KEY_USAGE_RANGES.find(x => x[0] === String(hours));
+  return row ? row[1] : String(hours || '累计');
+}
+
+function renderKeyRange() {
+  const host = $('keyRange');
+  if (!host) return;
+  host.querySelectorAll('button[data-key-hours]').forEach(btn => {
+    const on = btn.dataset.keyHours === keyUsageState.hours;
+    btn.classList.toggle('on', on);
+    btn.setAttribute('aria-pressed', String(on));
+  });
+}
+
+function keyStats(id) {
+  const raw = keyUsageState.usage && keyUsageState.usage[id];
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+function keyNumber(value) {
+  const n = Number(value || 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function keySuccessRate(stats) {
+  const requests = keyNumber(stats.requests);
+  if (!requests) return null;
+  const rate = Number(stats.success_rate);
+  if (Number.isFinite(rate)) return Math.max(0, Math.min(100, rate));
+  return Math.max(0, Math.min(100, (requests - keyNumber(stats.errors)) / requests * 100));
+}
+
+function keyRateText(stats) {
+  const rate = keySuccessRate(stats);
+  return rate == null ? '—' : rate.toFixed(1) + '%';
+}
+
+function keyRateClass(stats) {
+  const rate = keySuccessRate(stats);
+  if (rate == null) return 'is-muted';
+  return rate >= 99 ? 'is-good' : rate >= 90 ? 'is-warn' : 'is-bad';
+}
+
+function keyTokenText(stats) {
+  const requests = keyNumber(stats.requests);
+  const samples = keyNumber(stats.token_requests);
+  if (!requests && !samples) return '0';
+  if (!samples) return '—';
+  return fmtTok(stats.total_tokens);
+}
+
+function keyTokenTitle(stats) {
+  const samples = keyNumber(stats.token_requests);
+  if (!keyNumber(stats.requests)) return '当前区间无请求';
+  if (!samples) return '上游未返回 Token，不做估算';
+  return 'Prompt ' + fmtTok(stats.prompt_tokens) + ' · Completion ' +
+    fmtTok(stats.completion_tokens) + ' · ' + samples + ' 次请求含 Token';
+}
+
+function keyLastText(stats) {
+  const at = parseAPITime(stats.last_used_at);
+  return at ? ago(stats.last_used_at) : '暂无调用';
+}
+
+function keyRangeEcho(usage) {
+  const from = parseAPITime(usage && usage.from);
+  const to = parseAPITime(usage && usage.to);
+  if (!from && !to) return keyRangeLabel(usage && usage.hours);
+  return (from ? fmtLocalDateTime(from) : '记录起点') + ' → ' +
+    (to ? fmtLocalDateTime(to) : '现在');
+}
+
+function keyUsageMetric(label, value, sub, cls) {
+  return '<div class="key-usage-metric ' + (cls || '') + '">' +
+    '<span>' + esc(label) + '</span><strong>' + esc(value) + '</strong>' +
+    (sub ? '<small>' + esc(sub) + '</small>' : '') + '</div>';
+}
+
+function compressKeySeries(series, maxPoints, window = {}) {
+  const rows = (Array.isArray(series) ? series : []).filter(row => parseAPITime(row && row.time))
+    .slice().sort((a, b) => parseAPITime(a.time) - parseAPITime(b.time));
+  if (!rows.length) return [];
+  const unit = window.granularity === 'day' ? 86400000 : 3600000;
+  const first = parseAPITime(window.from) || parseAPITime(rows[0].time);
+  const last = parseAPITime(window.to) || parseAPITime(rows[rows.length - 1].time);
+  const start = Math.floor(first / unit) * unit;
+  const end = Math.max(start, Math.floor(last / unit) * unit);
+  const units = Math.floor((end - start) / unit) + 1;
+  const limit = Math.max(1, Math.min(30, Math.floor(keyNumber(maxPoints)) || 30));
+  const groupSize = Math.max(1, Math.ceil(units / limit));
+  const width = groupSize * unit;
+  const fields = ['requests', 'errors', 'prompt_tokens', 'completion_tokens',
+    'total_tokens', 'token_requests', 'credit', 'credit_requests'];
+  // Allocate at most 30 equal time bins, including silent periods, even for long histories.
+  const out = Array.from({ length: Math.ceil(units / groupSize) }, (_, i) => ({
+    time: new Date(start + i * width).toISOString(),
+    end_time: new Date(Math.min(end, start + (i + 1) * width - unit)).toISOString(),
+    requests: 0, errors: 0, prompt_tokens: 0, completion_tokens: 0,
+    total_tokens: 0, token_requests: 0, credit: 0, credit_requests: 0, avg_latency_ms: 0,
+  }));
+  for (const row of rows) {
+    const index = Math.floor((parseAPITime(row.time) - start) / width);
+    if (index < 0 || index >= out.length) continue;
+    const bin = out[index];
+    const latency = bin.avg_latency_ms * bin.requests + keyNumber(row.avg_latency_ms) * keyNumber(row.requests);
+    fields.forEach(field => { bin[field] += keyNumber(row[field]); });
+    bin.avg_latency_ms = bin.requests ? latency / bin.requests : 0;
+  }
+  return out;
+}
+
+function keyTrendPointLabel(iso, granularity) {
+  const at = parseAPITime(iso);
+  if (!at) return '—';
+  const d = new Date(at);
+  const p = n => String(n).padStart(2, '0');
+  return granularity === 'day'
+    ? (d.getMonth() + 1) + '-' + p(d.getDate())
+    : (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':00';
+}
+
+function keyModelRowsHtml(models) {
+  const rows = (Array.isArray(models) ? models : []).slice().sort((a, b) =>
+    keyNumber(b.total_tokens) - keyNumber(a.total_tokens) ||
+    keyNumber(b.requests) - keyNumber(a.requests));
+  if (!rows.length) return '<div class="key-detail-empty">当前区间没有模型调用。</div>';
+  const useTokens = rows.some(row => keyNumber(row.token_requests) > 0);
+  const max = Math.max(1, ...rows.map(row =>
+    useTokens ? keyNumber(row.total_tokens) : keyNumber(row.requests)));
+  return rows.map(row => {
+    const tokenKnown = keyNumber(row.token_requests) > 0;
+    const amount = useTokens ? keyNumber(row.total_tokens) : keyNumber(row.requests);
+    const width = Math.max(amount ? 2 : 0, amount / max * 100);
+    return '<div class="key-model-row">' +
+      '<div class="key-model-name"><b>' + esc(row.model || '未知模型') + '</b>' +
+      '<span>' + fmtTok(row.requests) + ' 次 · 成功率 ' + keyRateText(row) + '</span></div>' +
+      '<div class="key-model-track" aria-hidden="true"><i style="width:' + width.toFixed(2) + '%"></i></div>' +
+      '<div class="key-model-value" title="' + esc(keyTokenTitle(row)) + '">' +
+      (tokenKnown ? fmtTok(row.total_tokens) + ' tokens' : 'Token 未返回') + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function keyTrendHtml(usage) {
+  const points = compressKeySeries(usage.series || [], 30, usage);
+  if (!points.length) return '<div class="key-detail-empty">当前区间没有趋势数据。</div>';
+  const tokenSamples = points.reduce((n, row) => n + keyNumber(row.token_requests), 0);
+  const useTokens = tokenSamples > 0;
+  const values = points.map(row => useTokens ? keyNumber(row.total_tokens) : keyNumber(row.requests));
+  const max = Math.max(1, ...values);
+  const bars = points.map((row, i) => {
+    const value = values[i];
+    const height = value ? Math.max(3, value / max * 100) : 0;
+    const start = keyTrendPointLabel(row.time, usage.granularity);
+    const end = row.end_time && row.end_time !== row.time
+      ? ' → ' + keyTrendPointLabel(row.end_time, usage.granularity) : '';
+    const title = start + end + ' · ' + keyNumber(row.requests) + ' 次请求 · ' +
+      (keyNumber(row.requests) === 0 ? '无请求' : keyNumber(row.token_requests) ? fmtTok(row.total_tokens) + ' tokens' : 'Token 未返回');
+    return '<i style="height:' + height.toFixed(2) + '%" title="' + esc(title) + '"></i>';
+  }).join('');
+  const first = keyTrendPointLabel(points[0].time, usage.granularity);
+  const last = keyTrendPointLabel(points[points.length - 1].end_time || points[points.length - 1].time, usage.granularity);
+  return '<div class="key-trend-chart" aria-label="' +
+    esc((useTokens ? 'Token' : '请求数') + '趋势') + '">' + bars + '</div>' +
+    '<div class="key-trend-axis"><span>' + esc(first) + '</span><span>' +
+    esc(useTokens ? '峰值 ' + fmtTok(max) + ' tokens' : '峰值 ' + fmtTok(max) + ' 次') +
+    '</span><span>' + esc(last) + '</span></div>';
+}
+
+function keyEventResult(event) {
+  if (event && event.ok) return ['is-ok', '成功'];
+  const outcome = String(event && event.outcome || '');
+  const labels = {
+    http_error: 'HTTP 失败',
+    stream_error: '流式失败',
+    interrupted: '连接中断',
+  };
+  return ['is-bad', labels[outcome] || '失败'];
+}
+
+function keyEventsHtml(events) {
+  const rows = (Array.isArray(events) ? events : []).slice(0, 20);
+  if (!rows.length) return '<div class="key-detail-empty">当前区间没有请求记录。</div>';
+  return rows.map(event => {
+    const result = keyEventResult(event);
+    const tokenText = event.token_known ? fmtTok(event.total_tokens) : '—';
+    const creditText = event.credit_known ? fmtCredit(event.credit) : '—';
+    const attempts = keyNumber(event.attempts);
+    const eventAt = parseAPITime(event.time);
+    return '<div class="key-event-row ' + result[0] + '">' +
+      '<div class="key-event-time">' + esc(eventAt ? fmtLocalDateTime(eventAt) : '—') + '</div>' +
+      '<div class="key-event-route"><b>' + esc(event.model || '未识别模型') + '</b>' +
+      '<span title="' + esc(event.path || '') + '">' + esc(event.path || '—') + '</span></div>' +
+      '<div class="key-event-result"><b>' + esc(result[1]) + '</b><span>' +
+      esc(event.status ? 'HTTP ' + event.status : '无状态') + '</span></div>' +
+      '<div class="key-event-num" data-l="Tokens">' + esc(tokenText) + '</div>' +
+      '<div class="key-event-num" data-l="延迟">' + esc(fmtMs(event.duration_ms)) + '</div>' +
+      '<div class="key-event-num" data-l="积分">' + esc(creditText) + '</div>' +
+      '<div class="key-event-id" title="' + esc(event.request_id || '') + '">' +
+      esc(event.request_id || '—') + (attempts > 1 ? ' · ' + attempts + ' 次尝试' : '') + '</div>' +
+      '</div>';
+  }).join('');
+}
+
+function keyUsageDetailHtml() {
+  if (keyUsageState.detailLoading && !keyUsageState.detail) {
+    return '<div class="key-detail-state">正在读取用量明细…</div>';
+  }
+  if (keyUsageState.detailError) {
+    return '<div class="key-detail-state is-error">读取用量失败：' +
+      esc(keyUsageState.detailError) + '</div>';
+  }
+  if (!keyUsageState.detail) {
+    return '<div class="key-detail-state">展开后读取用量明细。</div>';
+  }
+  const detail = keyUsageState.detail;
+  const usage = detail.usage && typeof detail.usage === 'object' ? detail.usage : {};
+  const totals = usage.totals && typeof usage.totals === 'object' ? usage.totals : {};
+  const requests = keyNumber(totals.requests);
+  const tokenSamples = keyNumber(totals.token_requests);
+  const creditSamples = keyNumber(totals.credit_requests);
+  const updated = keyUsageState.detailUpdatedAt
+    ? ' · 更新于 ' + fmtLocalDateTime(keyUsageState.detailUpdatedAt).slice(11) : '';
+  return '<div class="key-usage-head">' +
+    '<div><h4>用量明细 <span>' + esc(keyRangeLabel(usage.hours)) + '</span></h4>' +
+    '<p>' + esc(keyRangeEcho(usage)) + ' · ' +
+    esc(usage.granularity === 'day' ? '按日聚合' : '按小时聚合') + updated + '</p></div>' +
+    '<button type="button" class="xs ghost" data-key-id="' +
+    esc(keyUsageState.expandedId) + '" data-key-action="usage" aria-expanded="true">收起</button>' +
+    '</div>' +
+    '<div class="key-usage-kpis">' +
+    keyUsageMetric('请求', fmtTok(requests), '失败 ' + fmtTok(totals.errors), 'is-accent') +
+    keyUsageMetric('成功率', keyRateText(totals), '按已鉴权请求计算',
+      keyRateClass(totals)) +
+    keyUsageMetric('Tokens', tokenSamples ? fmtTok(totals.total_tokens) : '—',
+      tokenSamples ? tokenSamples + ' 次含 Token' : '上游未返回', 'is-accent') +
+    keyUsageMetric('积分', creditSamples ? fmtCredit(totals.credit) : '—',
+      creditSamples ? creditSamples + ' 次含积分' : '上游未返回') +
+    keyUsageMetric('平均延迟', fmtMs(totals.avg_latency_ms), '当前区间') +
+    '</div>' +
+    '<div class="key-usage-grid">' +
+    '<section class="key-detail-block"><header><h5>模型分布</h5><span>' +
+    (usage.by_model || []).length + ' 个模型</span></header><div class="key-model-list">' +
+    keyModelRowsHtml(usage.by_model) + '</div></section>' +
+    '<section class="key-detail-block"><header><h5>调用趋势</h5><span>' +
+    (usage.series || []).length + ' 个时间点</span></header><div class="key-trend-wrap">' +
+    keyTrendHtml(usage) + '</div></section>' +
+    '</div>' +
+    '<section class="key-detail-block key-recent-block"><header><h5>最近请求</h5><span>' +
+    Math.min(20, (usage.recent || []).length) + ' 条 · 仅当前区间</span></header>' +
+    '<div class="key-event-head" aria-hidden="true"><span>时间</span><span>模型 / 路径</span>' +
+    '<span>结果</span><span>Tokens</span><span>延迟</span><span>积分</span><span>请求 ID</span></div>' +
+    '<div class="key-event-list">' + keyEventsHtml(usage.recent) + '</div></section>';
+}
+
+function renderKeys() {
+  $('keyTotal').textContent = distributedKeys.length;
+  $('keyEnabled').textContent = distributedKeys.filter(k => k.enabled).length;
+  $('keyDisabled').textContent = distributedKeys.filter(k => !k.enabled).length;
+  const rows = distributedKeys.filter(k => (!keyListState.q || (k.name + ' ' + k.prefix).toLowerCase().includes(keyListState.q))
+    && (!keyListState.status || k.enabled === (keyListState.status === 'enabled')));
+  const paged = pageItems(rows, keyListState, 'keys', distributedKeys.length, '密钥');
+  $('keysBody').innerHTML = paged.length ? paged.map(k => {
+    const stats = keyStats(k.id);
+    const known = keyUsageState.available;
+    const pending = keyUsageState.rangeLoading;
+    const metricText = value => pending ? '…' : known ? value : '—';
+    const lastAt = parseAPITime(stats.last_used_at);
+    const lastTitle = lastAt ? fmtLocalDateTime(lastAt) : '尚无已鉴权调用';
+    const expanded = keyUsageState.expandedId === k.id;
+    const row = '<tr class="key-row" data-key-id="' + esc(k.id) + '">' +
+      '<td class="key-person-cell"><div class="key-person"><span class="key-avatar" aria-hidden="true">' +
+      esc(Array.from(k.name)[0] || 'K') + '</span><div><div class="key-name">' +
+      esc(k.name) + '</div><div class="key-subtitle"><code>' + esc(k.prefix) +
+      '…</code><span>创建于 ' + esc(fmtLocalDateTime(parseAPITime(k.created_at))) +
+      '</span></div></div></div></td>' +
+      '<td class="key-status-cell"><span class="key-status ' + (k.enabled ? 'is-enabled' : '') +
+      '"><i></i>' + (k.enabled ? '已启用' : '已停用') + '</span></td>' +
+      '<td class="num key-metric-cell" data-l="请求">' +
+      metricText(fmtTok(stats.requests)) + '</td>' +
+      '<td class="num key-metric-cell ' + (known ? keyRateClass(stats) : 'is-muted') +
+      '" data-l="成功率">' + metricText(keyRateText(stats)) + '</td>' +
+      '<td class="num key-metric-cell key-token-cell" data-l="Tokens" title="' +
+      esc(known ? keyTokenTitle(stats) : '用量记录未启用') + '">' +
+      metricText(keyTokenText(stats)) + '</td>' +
+      '<td class="key-last-cell" data-l="最近调用" title="' + esc(lastTitle) + '">' +
+      esc(metricText(keyLastText(stats))) + '</td>' +
+      '<td class="acts">' +
+      '<button class="xs ghost key-usage-toggle' + (expanded ? ' on' : '') +
+      '" data-key-id="' + esc(k.id) + '" data-key-action="usage" aria-expanded="' +
+      String(expanded) + '"' + (known ? '' : ' disabled title="用量监控不可用"') + '>用量</button>' +
+      '<button class="xs ghost" data-key-id="' + esc(k.id) + '" data-key-action="' +
+      (k.enabled ? 'disable' : 'enable') + '">' + (k.enabled ? '停用' : '启用') + '</button>' +
+      '<button class="xs ghost danger" data-key-id="' + esc(k.id) +
+      '" data-key-action="delete">删除</button></td></tr>';
+    return row + (expanded
+      ? '<tr class="key-usage-row"><td colspan="7"><div class="key-usage-panel">' +
+        keyUsageDetailHtml() + '</div></td></tr>'
+      : '');
+  }).join('')
+    : '<tr><td colspan="7"><div class="keys-empty"><span class="empty-key-icon" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="7" cy="7" r="4"/><path d="m10 10 7 7m-3-3 2-2m-4 0 2-2"/></svg></span><strong>' + (distributedKeys.length ? '没有匹配的密钥' : '创建你的第一把 API 密钥') + '</strong><p>' + (distributedKeys.length ? '试试其他名称或状态。' : '点击右上角「创建密钥」，为使用人分配独立访问凭证。') + '</p></div></td></tr>';
+}
+
+async function loadKeys(opts = {}) {
+  if (opts.quiet && keyListLoading) return false;
+  const epoch = keyViewEpoch, hours = keyUsageState.hours, seq = ++keyListSeq;
+  keyListLoading = true;
+  try {
+    const d = await api('keys?hours=' + encodeURIComponent(hours));
+    if (view !== 'keys' || epoch !== keyViewEpoch || hours !== keyUsageState.hours || seq !== keyListSeq) return false;
+    distributedKeys = (d.keys || []).slice().sort((a, b) => parseAPITime(b.created_at) - parseAPITime(a.created_at));
+    keyUsageState.available = d.usage_available === true;
+    keyUsageState.usage = d.usage && typeof d.usage === 'object' ? d.usage : {};
+    keyUsageState.rangeLoading = false;
+    $('btnKeyCreate').disabled = !d.available || !d.admin_configured;
+    $('btnKeyOpen').disabled = !d.available || !d.admin_configured;
+    $('keysNote').textContent = !d.available ? '当前服务未启用分发 Key 存储。' : !d.admin_configured
+      ? '请先到「配置」设置管理员密钥，再生成分发 Key。'
+      : !keyUsageState.available ? '密钥用量记录未启用；密钥管理仍可正常使用。'
+      : '统计聊天与搜索请求；重试只计一次。约 15 秒自动刷新。';
+    if (keyUsageState.expandedId && !distributedKeys.some(k => k.id === keyUsageState.expandedId)) {
+      keyUsageState.expandedId = '';
+      keyUsageState.detail = null;
+      keyUsageState.detailError = '';
+      keyUsageState.detailLoading = false;
+      keyDetailSeq++;
+    }
+    renderKeyRange();
+    renderKeys();
+    return true;
+  } catch (e) {
+    if (view === 'keys' && epoch === keyViewEpoch && hours === keyUsageState.hours && seq === keyListSeq) {
+      keyUsageState.rangeLoading = false;
+      keyUsageState.available = false;
+      keyUsageState.usage = {};
+      $('btnKeyCreate').disabled = true;
+      $('btnKeyOpen').disabled = true;
+      $('keysNote').textContent = '读取密钥失败：' + e.message;
+      renderKeys();
+    }
+    return false;
+  } finally {
+    if (seq === keyListSeq) keyListLoading = false;
+  }
+}
+
+async function loadKeyUsage(id, opts = {}) {
+  if (!id || view !== 'keys') return false;
+  if (opts.quiet && keyUsageState.detailLoading && keyUsageState.detailKeyId === id) return false;
+  const epoch = keyViewEpoch, hours = keyUsageState.hours, seq = ++keyDetailSeq;
+  keyUsageState.detailKeyId = id;
+  keyUsageState.detailLoading = true;
+  keyUsageState.detailError = '';
+  if (!opts.quiet) keyUsageState.detail = null;
+  renderKeys();
+  try {
+    const d = await api('keys/' + encodeURIComponent(id) + '/usage?hours=' + encodeURIComponent(hours));
+    if (view !== 'keys' || epoch !== keyViewEpoch || hours !== keyUsageState.hours ||
+      keyUsageState.expandedId !== id || seq !== keyDetailSeq) return false;
+    keyUsageState.detailLoading = false;
+    keyUsageState.detail = d && d.usage && typeof d.usage === 'object' ? d : { usage: {} };
+    keyUsageState.detailUpdatedAt = Date.now();
+    renderKeys();
+    return true;
+  } catch (e) {
+    if (view === 'keys' && epoch === keyViewEpoch && hours === keyUsageState.hours &&
+      keyUsageState.expandedId === id && seq === keyDetailSeq) {
+      keyUsageState.detailLoading = false;
+      keyUsageState.detailError = e.message;
+      renderKeys();
+    }
+    return false;
+  }
+}
+
+function toggleKeyUsage(id) {
+  if (keyUsageState.expandedId === id) {
+    keyUsageState.expandedId = '';
+    keyUsageState.detailKeyId = '';
+    keyUsageState.detail = null;
+    keyUsageState.detailError = '';
+    keyUsageState.detailLoading = false;
+    keyUsageState.detailUpdatedAt = 0;
+    keyDetailSeq++;
+    renderKeys();
+    return;
+  }
+  keyUsageState.expandedId = id;
+  keyUsageState.detailKeyId = id;
+  keyUsageState.detail = null;
+  keyUsageState.detailError = '';
+  keyUsageState.detailLoading = true;
+  renderKeys();
+  return loadKeyUsage(id);
+}
+
+function setKeyRange(hours) {
+  hours = String(hours);
+  if (hours === keyUsageState.hours) return refreshKeys(false);
+  keyUsageState.hours = hours;
+  keyUsageState.usage = {};
+  keyUsageState.detailUpdatedAt = 0;
+  keyUsageState.detail = null;
+  keyUsageState.detailError = '';
+  keyUsageState.detailLoading = false;
+  keyUsageState.rangeLoading = true;
+  keyViewEpoch++;
+  keyListSeq++;
+  keyDetailSeq++;
+  keyListLoading = false;
+  renderKeyRange();
+  const jobs = [loadKeys()];
+  if (keyUsageState.expandedId) jobs.push(loadKeyUsage(keyUsageState.expandedId));
+  renderKeys();
+  return Promise.allSettled(jobs);
+}
+
+function refreshKeys(quiet) {
+  if (view !== 'keys') return Promise.resolve([]);
+  const jobs = [loadKeys({ quiet: !!quiet })];
+  if (keyUsageState.expandedId) jobs.push(loadKeyUsage(keyUsageState.expandedId, { quiet: !!quiet }));
+  return Promise.allSettled(jobs);
+}
+
+$('keyCreateForm').onsubmit = async ev => {
+  ev.preventDefault();
+  // Keep an unacknowledged new key on screen until its owner has saved it.
+  if (!$('keyCreated').hidden) { toast('请先保存当前新 Key 并关闭提示', 'err'); return; }
+  const name = $('keyName').value.trim();
+  if (!name) { $('keyName').focus(); return; }
+  $('btnKeyCreate').disabled = true;
+  try {
+    const d = await api('keys', { method: 'POST', body: JSON.stringify({ name }) });
+    $('keySecret').value = d.secret;
+    $('keyCreated').hidden = false;
+    $('keyComposer').hidden = true;
+    $('keyName').value = '';
+    keyListState.page = 1;
+    await loadKeys();
+  } catch (e) { toast('生成失败：' + e.message, 'err'); await loadKeys(); }
+};
+$('keysBody').onclick = async ev => {
+  const btn = ev.target.closest('button[data-key-action]');
+  if (!btn || btn.disabled) return;
+  const id = btn.dataset.keyId, action = btn.dataset.keyAction;
+  const key = distributedKeys.find(k => k.id === id);
+  if (!key) return;
+  if (action === 'usage') {
+    await toggleKeyUsage(id);
+    return;
+  }
+  if (action === 'delete' && !confirm('删除「' + key.name + '」的 Key？删除后使用人需更换 Key。')) return;
+  btn.disabled = true;
+  try {
+    await api('keys/' + encodeURIComponent(id), action === 'delete' ? { method: 'DELETE' }
+      : { method: 'PATCH', body: JSON.stringify({ enabled: action === 'enable' }) });
+    toast(action === 'delete' ? 'Key 已删除' : action === 'enable' ? 'Key 已启用' : 'Key 已停用', 'ok');
+    if (action === 'delete' && keyUsageState.expandedId === id) {
+      keyUsageState.expandedId = '';
+      keyUsageState.detail = null;
+      keyDetailSeq++;
+    }
+    await loadKeys();
+  } catch (e) { toast('操作失败：' + e.message, 'err'); }
+  finally { btn.disabled = false; }
+};
+$('btnKeysReload').onclick = () => refreshKeys(false);
+$('keyRange').onclick = ev => {
+  const btn = ev.target.closest('button[data-key-hours]');
+  if (!btn || btn.disabled) return;
+  setKeyRange(btn.dataset.keyHours);
+};
+$('btnKeyOpen').onclick = () => {
+  if (!$('keyCreated').hidden) { $('keySecret').focus(); toast('请先保存当前新 Key 并关闭提示', 'err'); return; }
+  $('keyComposer').hidden = false;
+  $('keyName').focus();
+};
+$('btnKeyCancel').onclick = () => { $('keyComposer').hidden = true; $('keyName').value = ''; };
+$('btnKeyDismiss').onclick = dismissCreatedKey;
+$('btnKeyCopy').onclick = () => navigator.clipboard.writeText($('keySecret').value)
+  .then(() => toast('Key 已复制', 'ok'), () => { $('keySecret').focus(); $('keySecret').select(); toast('请手动复制已选中的 Key', 'err'); });
+$('keysSearch').oninput = () => { keyListState.q = $('keysSearch').value.trim().toLowerCase(); keyListState.page = 1; renderKeys(); };
+$('keysStatus').onchange = () => { keyListState.status = $('keysStatus').value; keyListState.page = 1; renderKeys(); };
+$('keysPageSize').onchange = () => { keyListState.size = Number($('keysPageSize').value); keyListState.page = 1; renderKeys(); };
+$('keysPrev').onclick = () => { keyListState.page--; renderKeys(); };
+$('keysNext').onclick = () => { keyListState.page++; renderKeys(); };
+renderKeyRange();
 
 /* ── 添加账号 ─────────────────────────────────────────────────────── */
 function openAdd() {
@@ -3162,14 +3720,14 @@ function expBatches(packs) {
 
 // 分页只切展示列表：汇总与批量操作始终使用完整数据。刷新后收缩到合法页，
 // 正常轮询不重置页码；筛选及每页数量变化由控件显式回到第一页。
-function pageItems(list, state, prefix, total) {
+function pageItems(list, state, prefix, total, unit = '账号') {
   const pages = Math.max(1, Math.ceil(list.length / state.size));
   state.page = Math.max(1, Math.min(state.page, pages));
   const start = (state.page - 1) * state.size;
   const end = Math.min(start + state.size, list.length);
   const setText = (id, value) => { const el = $(prefix + id); if (el) el.textContent = value; };
-  setText('Count', '匹配 ' + list.length + ' / 共 ' + total + ' 个账号');
-  setText('PageInfo', list.length ? '显示第 ' + (start + 1) + '–' + end + ' 个，共 ' + list.length + ' 个' : '没有可显示的账号');
+  setText('Count', '匹配 ' + list.length + ' / 共 ' + total + ' 个' + unit);
+  setText('PageInfo', list.length ? '显示第 ' + (start + 1) + '–' + end + ' 个，共 ' + list.length + ' 个' : '没有可显示的' + unit);
   setText('PageNumber', state.page + ' / ' + pages);
   const prev = $(prefix + 'Prev'), next = $(prefix + 'Next');
   if (prev) prev.disabled = state.page === 1;

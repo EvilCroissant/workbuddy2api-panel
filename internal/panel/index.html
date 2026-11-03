@@ -630,15 +630,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 </style>
 <!-- 移动端适配：独立文件，必须在主 <style> 之后（@media 覆盖依赖层叠顺序） -->
 <link rel="stylesheet" href="mobile.css">
+<link rel="stylesheet" href="console.css">
 </head>
 <body>
 <div class="shell">
   <nav class="nav" id="navDrawer">
     <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 7 3 10 4-8 4 8 3-10"/></svg></div>
       <div class="name">WorkBuddy2API</div>
       <div class="sub" id="navSub">控制台</div>
     </div>
     <ul>
+      <li class="nav-label">工作空间</li>
       <li><a href="#accounts" data-view="accounts" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
         账号池</a></li>
@@ -654,6 +657,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#models" data-view="models">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
         模型与档位</a></li>
+      <li class="nav-label">服务管理</li>
+      <li><a href="#keys" data-view="keys">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="6" r="3"/><path d="m7.2 8.2 5.3 5.3M10 11l2-2M12 13l2-2"/></svg>
+        API 密钥</a></li>
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
@@ -686,6 +693,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 账号池 -->
     <section class="view" id="view-accounts">
+      <div class="page-heading"><div><span class="eyebrow">WORKSPACE</span><h1>账号池</h1><p>管理接入账号，掌握可用状态与积分余额。</p></div><span class="page-badge"><i></i>自动刷新</span></div>
       <div class="stats">
         <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
         <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
@@ -795,6 +803,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 任务中心 -->
     <section class="view" id="view-taskscenter" hidden>
+      <div class="page-heading"><div><span class="eyebrow">AUTOMATION</span><h1>任务中心</h1><p>集中查看待办任务，跟踪每个账号的执行进度。</p></div></div>
       <div class="box">
         <header>
           <h3>成长任务队列 <span class="hint" id="qcSummary"></span></h3>
@@ -825,6 +834,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 模型与档位 -->
     <section class="view" id="view-models" hidden>
+      <div class="page-heading"><div><span class="eyebrow">MODEL CATALOG</span><h1>模型与档位</h1><p>查找可用模型，对比能力、上下文与积分倍率。</p></div></div>
       <div class="box">
         <header>
           <h3>模型能力 <span class="hint">max_tokens bug已修复目前可以正常透传最大输出,但是官方返回的最大输出仅为参考，不保证完全正确
@@ -884,6 +894,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 积分构成 -->
     <section class="view" id="view-packages" hidden>
+      <div class="page-heading"><div><span class="eyebrow">CREDITS</span><h1>积分构成</h1><p>查看积分来源、剩余额度与到期分布。</p></div></div>
       <div class="box">
         <header>
           <h3>积分到期分布</h3>
@@ -911,6 +922,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 用量 -->
     <section class="view" id="view-usage" hidden>
+      <div class="page-heading"><div><span class="eyebrow">ANALYTICS</span><h1>用量分析</h1><p>了解调用趋势，按账号和模型追踪资源消耗。</p></div></div>
       <div class="box">
         <header>
           <h3>用量总览</h3>
@@ -983,8 +995,49 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       </div>
     </section>
 
+    <!-- 多 Key 分发 -->
+    <section class="view" id="view-keys" hidden>
+      <div class="page-heading"><div><span class="eyebrow">ACCESS MANAGEMENT</span><h1>API 密钥</h1><p>为不同使用人分配独立密钥，随时管理访问权限。</p></div><button type="button" class="primary create-key-button" id="btnKeyOpen" disabled><span aria-hidden="true">＋</span> 创建密钥</button></div>
+      <div class="key-summary" aria-label="密钥概览">
+        <div class="key-metric"><span>全部密钥</span><strong id="keyTotal">—</strong><small>独立分发，统一管理</small></div>
+        <div class="key-metric"><span><i class="metric-dot enabled"></i>已启用</span><strong id="keyEnabled">—</strong><small>可调用当前账号池</small></div>
+        <div class="key-metric"><span><i class="metric-dot"></i>已停用</span><strong id="keyDisabled">—</strong><small>保留记录，可随时恢复</small></div>
+      </div>
+      <div class="box key-composer" id="keyComposer" hidden>
+        <header><div><h3>创建 API 密钥</h3><p class="section-description">为密钥添加一个便于识别的名称。</p></div><span class="grow"></span><button type="button" class="xs ghost" id="btnKeyCancel">取消</button></header>
+        <div class="pad">
+          <form id="keyCreateForm">
+            <label class="fld"><span class="lb">使用人 / 用途</span><input id="keyName" required maxlength="80" placeholder="例如：小张 · Cherry Studio" autocomplete="off"><span class="hint">仅用于识别使用人，共享账号池和模型权限。</span></label>
+            <button type="submit" class="primary" id="btnKeyCreate" disabled>生成分发 Key</button>
+          </form>
+        </div>
+      </div>
+          <div class="box key-secret-card" id="keyCreated" hidden>
+            <div class="pad"><span class="secret-success">密钥已创建</span><h3>复制并保存你的 API Key</h3><p class="section-description">完整密钥仅显示一次，关闭后可删除并重新生成。</p>
+            <label class="fld"><span class="lb">新 Key</span><input id="keySecret" readonly autocomplete="off" spellcheck="false"></label>
+            <div class="secret-actions"><button type="button" class="primary" id="btnKeyCopy">复制 Key</button>
+            <button type="button" class="ghost" id="btnKeyDismiss">已保存，关闭</button></div></div>
+          </div>
+      <div class="box keys-table-box">
+        <header><div><h3>所有密钥 <span class="heading-count" id="keysCount"></span></h3><p class="section-description">管理访问凭证，查看请求、成功率和 Token 消耗。</p></div><span class="grow"></span><div class="key-range" id="keyRange" role="group" aria-label="用量统计区间"><button type="button" data-key-hours="24">24h</button><button type="button" data-key-hours="168">7d</button><button type="button" data-key-hours="720">30d</button><button type="button" data-key-hours="0" class="on" aria-pressed="true">累计</button></div><button class="xs ghost" id="btnKeysReload">刷新</button></header>
+        <div class="list-tools"><div class="search-field"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="keysSearch" type="search" placeholder="搜索名称或密钥前缀…" aria-label="搜索分发密钥"></div><select id="keysStatus" aria-label="密钥状态"><option value="">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select><span class="table-scope">共享账号池</span></div>
+        <div class="tbl-wrap"><table class="acc zebra">
+          <thead><tr><th>使用人 / 用途</th><th>状态</th><th class="num">请求</th><th class="num">成功率</th><th class="num">Tokens</th><th>最近调用</th><th>操作</th></tr></thead>
+          <tbody id="keysBody"><tr><td colspan="7">正在读取…</td></tr></tbody>
+        </table></div>
+        <div class="list-pager" role="group" aria-label="分发密钥分页">
+          <span class="page-info" id="keysPageInfo" aria-live="polite"></span>
+          <label>每页 <select id="keysPageSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label>
+          <button class="xs" id="keysPrev" disabled>上一页</button><span id="keysPageNumber">1 / 1</span><button class="xs" id="keysNext" disabled>下一页</button>
+        </div>
+      </div>
+      <div class="key-footnote"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m10 2 6 3v5c0 4-6 7-6 7s-6-3-6-7V5z"/><path d="m7 9 2 2 4-4"/></svg><p id="keysNote" role="status">分发密钥仅用于 API 调用，管理面板使用管理员密钥。</p></div>
+      <details class="key-guide"><summary>如何在客户端使用？</summary><p>Base URL 填写本网关地址并以 <code>/v1</code> 结尾；API Key 填写新生成的 <code>sk-wb-…</code> 密钥。分发密钥可调用聊天、搜索与模型列表。</p></details>
+    </section>
+
     <!-- 配置 -->
     <section class="view" id="view-config" hidden>
+      <div class="page-heading"><div><span class="eyebrow">PREFERENCES</span><h1>服务配置</h1><p>调整网关、账号调度与自动任务的运行方式。</p></div></div>
       <form id="cfgForm">
         <div class="box">
           <header><h3>服务</h3><span class="grow"></span><span class="note" id="cfgPath"></span></header>
@@ -993,10 +1046,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <label class="fld"><span class="lb">监听地址</span>
                 <input name="listen" placeholder=":7863">
                 <span class="hint">改动需重启进程</span></label>
-              <label class="fld"><span class="lb">API 密钥</span>
+              <label class="fld"><span class="lb">管理员密钥</span>
                 <div class="inline"><input name="api_key" id="cfgKey" type="password" placeholder="留空 = 不鉴权">
                 <button type="button" class="xs" id="btnEye">显示</button></div>
-                <span class="hint">立即生效（含面板自身）</span></label>
+                <span class="hint">用于面板和 API；分发给他人请使用「API 密钥」页。修改立即生效。</span></label>
             </div>
             <label class="fld"><span class="lb">单账号明细默认展示条数</span>
               <input name="package_detail_limit" type="number" min="1" placeholder="5">
@@ -1210,6 +1263,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 日志 -->
     <section class="view" id="view-logs" hidden>
+      <div class="page-heading"><div><span class="eyebrow">OBSERVABILITY</span><h1>运行日志</h1><p>定位调用问题，查看请求明细与系统事件。</p></div></div>
       <div class="box">
         <header>
           <h3>请求记录 <span class="hint">调用来源：IP 取 X-Forwarded-For 首段，无代理头时回落 TCP 对端</span></h3>
@@ -1391,7 +1445,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   <div class="dlg" style="width:420px">
     <header>
       <h3>需要访问密钥</h3>
-      <div class="hint">该网关已启用 api_key 鉴权，请输入 config.json 中的密钥。</div>
+      <div class="hint">请输入 config.json 中的管理员 api_key。分发 Key 仅用于 API 调用。</div>
     </header>
     <div class="body">
       <form style="display:contents" onsubmit="return false"><input type="password" id="keyInput" placeholder="api_key" autocomplete="off"></form>

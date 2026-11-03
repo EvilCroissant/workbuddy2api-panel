@@ -19,6 +19,8 @@ import (
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/credithist"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/keyusage"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/panel"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
@@ -74,6 +76,13 @@ func main() {
 		}
 	}
 
+	apiKeys, err := httpauth.OpenKeys(stateSibling(cfg.StateFile, "api-keys.json"))
+	if err != nil {
+		log.Fatalf("load distributed keys: %v", err)
+	}
+	if cfg.APIKey == "" && apiKeys.HasKeys() {
+		log.Fatal("存在分发 Key，请先配置 api_key 管理员密钥")
+	}
 	auths, err := auth.LoadDir(cfg.AuthDir)
 	if err != nil {
 		log.Fatalf("load auths: %v", err)
@@ -269,6 +278,12 @@ func main() {
 	rec.Start()
 	defer rec.Stop()
 	log.Printf("[usage] 逐请求用量记录已启用: %s (%s)", usagePath, rec.Describe())
+	keyRec, err := keyusage.Open(stateSibling(cfg.StateFile, "key-usage.json"))
+	if err != nil {
+		log.Fatalf("[keyusage] 读取密钥用量失败: %v", err)
+	}
+	keyRec.Start()
+	defer keyRec.Stop()
 
 	// 请求指标始终启用；JSONL 归档只写脱敏元数据，写盘失败不影响聊天请求。
 	requestLog := reqlog.New(reqlog.Config{
@@ -297,11 +312,13 @@ func main() {
 	pn := panel.New(panel.Config{
 		Pool:        p,
 		Usage:       rec,
+		KeyUsage:    keyRec,
 		RequestLog:  requestLog,
 		Upstream:    up,
 		Scheduler:   sch,
 		AuthDir:     cfg.AuthDir,
 		APIKey:      cfg.APIKey,
+		Keys:        apiKeys,
 		RedisMode:   redisMode,
 		StickyCount: sessCount,
 		Version:     appVersion,
@@ -332,6 +349,7 @@ func main() {
 		Pool:         p,
 		Upstream:     up,
 		APIKey:       cfg.APIKey,
+		Keys:         apiKeys,
 		Session:      sessRouter,
 		StickyCount:  sessCount,
 		RedisMode:    redisMode,
@@ -339,6 +357,7 @@ func main() {
 		Panel:        pn,
 		Live:         live,
 		Usage:        rec,
+		KeyUsage:     keyRec,
 		RequestLog:   requestLog,
 		PromptMode:   cfg.Prompt.Mode,
 		PromptText:   cfg.PromptText,
@@ -381,8 +400,10 @@ func main() {
 		// （长流式生成合法时长可达数分钟，全局 WriteTimeout 会误杀在途 SSE）。
 		IdleTimeout: 120 * time.Second,
 	}
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
+		defer close(shutdownDone)
 		p.Flush() // 信号触发：先落盘再做优雅停机
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -393,6 +414,8 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
 	}
+	// Let accepted requests finish before deferred usage recorders make their final save.
+	<-shutdownDone
 	log.Printf("bye")
 }
 

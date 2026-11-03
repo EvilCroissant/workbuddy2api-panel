@@ -60,6 +60,7 @@ type chatStat struct {
 	promptTokens     int64
 	completionTokens int64
 	totalTokens      int64
+	hasTokens        bool
 	// 缓存命中观测（usage.prompt_cache_hit_tokens / miss）：上游给到才有效。
 	// 供 usage 桶命中率维度与 reqlog 逐次记录；缺失时 hasCache=false 不参与统计。
 	cacheHit  int64
@@ -373,13 +374,14 @@ type requestTrace struct {
 	start time.Time
 	// path 实际请求路径（chat / search / search messages）。此前 Path 在 event() 里
 	// 硬编码为 /v1/chat/completions，搜索接入后必须按真实路径记账。
-	path string
+	path  string
+	keyID string
 	// account 本次请求实际使用的账号（搜索路径没有 chatStat，单独记录）。
 	account string
 	// model 非 chat 路径的模型标识（搜索写 "WorkBuddy搜索工具"）。chat 路径由
 	// chatStat.model 覆盖，二者不会同时生效。
 	model string
-	stat    *chatStat
+	stat  *chatStat
 	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
 	clientIP  string
 	userAgent string
@@ -448,6 +450,7 @@ func (t *requestTrace) event(status int) reqlog.Event {
 	e := reqlog.Event{
 		Time:      t.start,
 		RequestID: t.id,
+		KeyID:     t.keyID,
 		Path:      path,
 		Status:    status,
 	}
@@ -473,6 +476,7 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		e.PromptTokens = s.promptTokens
 		e.CompletionTokens = s.completionTokens
 		e.TotalTokens = s.totalTokens
+		e.TokenKnown = s.hasTokens
 		e.Credit = s.credit
 		e.HasCredit = s.hasCredit
 		e.CacheHitTokens = s.cacheHit

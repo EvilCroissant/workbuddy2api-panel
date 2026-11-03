@@ -4,7 +4,7 @@
 //
 // 设计约束：
 //   - 前端 go:embed 单文件（index.html），无任何外部构建依赖，与二进制同体部署；
-//   - 鉴权复用网关 api_key（Bearer），与 /v1/* 同一口径；api_key 为空 = 不鉴权
+//   - 面板鉴权使用管理员 api_key（Bearer），分发 Key 只授予 /v1/* 权限；无任何 Key 时免鉴权
 //     （仅本机/私网使用）。面板 HTML 本身无秘密，可匿名加载，密钥只发给 /panel/api/*；
 //   - 不改写既有池语义：所有运维操作落到 pool 已有入口（Revive/Disable/Remove...），
 //     添加账号走 auth.SaveAtomic + pool.Add，重启后与 auths/ 目录天然对齐。
@@ -24,6 +24,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/credithist"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/keyusage"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
@@ -39,6 +40,7 @@ type Config struct {
 	Scheduler *scheduler.Scheduler // 手动触发签到/保活；nil 时对应接口返回 501
 	AuthDir   string               // OAuth 登录完成后凭证落盘目录
 	APIKey    string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
+	Keys      *httpauth.KeyStore   // 分发 Key 只用于 /v1/*，面板始终使用管理员 APIKey
 	RedisMode string               // "upstash" / "noop"，仅观测透出
 	Version   string               // 面板版本号（展示用）
 
@@ -58,7 +60,8 @@ type Config struct {
 	StickyCount func() int
 
 	// Usage 逐请求用量记录器（nil = 用量接口返回 501）。
-	Usage *usage.Recorder
+	Usage    *usage.Recorder
+	KeyUsage *keyusage.Recorder
 	// RequestLog 请求指标与归档（nil = 对应接口返回 501）。
 	RequestLog *reqlog.Recorder
 	// CreditHistory 积分变动账本（nil = 积分历史接口返回 501）。只读展示：
@@ -78,6 +81,7 @@ type Panel struct {
 	mux     *http.ServeMux
 	started time.Time
 	logs    *Ring
+	keyMu   sync.Mutex // 串行化创建分发 Key 与管理员配置保存
 
 	// logins 进行中的 OAuth 设备授权会话（state → 会话信息）。
 	// poll 成功或超时（loginTTL）后剔除；面板常驻进程，容量天然有界。
@@ -154,6 +158,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/{$}", p.index)
 	p.mux.HandleFunc("GET /panel/app.js", p.appScript)
 	p.mux.HandleFunc("GET /panel/mobile.css", p.mobileStyle)
+	p.mux.HandleFunc("GET /panel/console.css", p.consoleStyle)
 	p.mux.HandleFunc("GET /panel/mobile.js", p.mobileScript)
 	p.mux.HandleFunc("GET /panel/api/overview", p.withAuth(p.overview))
 	p.mux.HandleFunc("GET /panel/api/logs", p.withAuth(p.logsHandler))
@@ -193,6 +198,11 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/model_probes", p.withAuth(p.modelProbes))
 	p.mux.HandleFunc("GET /panel/api/config", p.withAuth(p.getConfig))
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
+	p.mux.HandleFunc("GET /panel/api/keys", p.withAuth(p.listKeys))
+	p.mux.HandleFunc("GET /panel/api/keys/{id}/usage", p.withAuth(p.keyUsage))
+	p.mux.HandleFunc("POST /panel/api/keys", p.withAuth(p.createKey))
+	p.mux.HandleFunc("PATCH /panel/api/keys/{id}", p.withAuth(p.updateKey))
+	p.mux.HandleFunc("DELETE /panel/api/keys/{id}", p.withAuth(p.deleteKey))
 	p.mux.HandleFunc("GET /panel/api/compensation", p.withAuth(p.compensation))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/compensation", p.withAuth(p.accountCompensationClaim))
 	p.mux.HandleFunc("POST /panel/api/compensation_all", p.withAuth(p.compensationAll))
@@ -205,12 +215,12 @@ func (p *Panel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.mux.ServeHTTP(w, r)
 }
 
-// withAuth 与 server 包同口径的 Bearer 鉴权（经 httpauth 常量时间比较）；
-// api_key 为空时放行。密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求
+// withAuth 只校验管理员 Bearer（经 httpauth 常量时间比较）；
+// 没有任何 Key 时放行。密钥经 livecfg 快照读取：面板里改了 api_key，下一个请求
 // 即用新值（无需重启）。
 func (p *Panel) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !httpauth.VerifyBearer(r, p.apiKey()) {
+		if !httpauth.VerifyAdmin(r, p.apiKey(), p.cfg.Keys) {
 			writeErr(w, http.StatusUnauthorized, "invalid_api_key")
 			return
 		}
@@ -278,8 +288,8 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		"model_locks": p.cfg.Pool.ModelLockView(),
 		// 到期提醒快照的节奏与年龄：界面轮询是 5 秒级，但卡片数据只随余额后台刷新
 		// 更新（默认每 5 分钟）——把这两个数透出，前端才能如实标注「x 分钟前更新」。
-		"balance_refresh_sec":    p.balanceRefreshSec(),
-		"balance_refreshed_at":   p.balanceRefreshedAt(),
+		"balance_refresh_sec":  p.balanceRefreshSec(),
+		"balance_refreshed_at": p.balanceRefreshedAt(),
 	})
 }
 
