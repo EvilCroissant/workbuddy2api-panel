@@ -898,11 +898,13 @@ const end = src.indexOf('async function loadExpiry');
 if (start < 0 || end < 0 || end < start) throw new Error('expiry region not found');
 const sink = { innerHTML: '', textContent: '', hidden: true };
 const ctx = {
+  expiryListState: { q: '', realm: '', range: '', page: 1, size: 10 },
+  matchesAccount: () => true,
+  lastPackages: null, lastPackagesAt: 0,
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
   $: () => sink,
   Date, Math, Number, String, Map, Array, Object, isNaN,
-  lastPackages: null, lastPackagesAt: 0,
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.renderExpiry = renderExpiry;', ctx);
@@ -961,12 +963,15 @@ func TestAppJSExpirySnapshotRenders(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function renderExpirySnapshot');
+const start = src.indexOf('function expBatches');
 const end = src.indexOf('async function loadExpiry');
 if (start < 0 || end < 0 || end < start) throw new Error('expiry snapshot region not found');
 const sinks = {};
 const mk = id => (sinks[id] = { innerHTML: '', textContent: '', hidden: true });
 const ctx = {
+  expiryListState: { q: '', realm: '', range: '', page: 1, size: 10 },
+  matchesAccount: () => true,
+  lastPackages: null, lastPackagesAt: 0,
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
   $: id => (sinks[id] || mk(id)),
@@ -1039,11 +1044,13 @@ if (start < 0 || end < 0 || end < start) throw new Error('expiry region not foun
 const sinks = {};
 const mk = id => (sinks[id] = { innerHTML: '', children: [], textContent: '', hidden: true });
 const ctx = {
+  expiryListState: { q: '', realm: '', range: '', page: 1, size: 10 },
+  matchesAccount: () => true,
+  lastPackages: null, lastPackagesAt: 0,
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
   $: id => (sinks[id] || mk(id)),
   Date, Math, Number, String, Map, Array, Object, isNaN,
-  lastPackages: null, lastPackagesAt: 0,
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.renderExpiry = renderExpiry; this.renderExpirySnapshot = renderExpirySnapshot;', ctx);
@@ -1130,11 +1137,13 @@ if (start < 0 || end < 0 || end < start) throw new Error('expiry region not foun
 const sinks = {};
 const mk = id => (sinks[id] = { innerHTML: '', children: [], textContent: '', hidden: true });
 const ctx = {
+  expiryListState: { q: '', realm: '', range: '', page: 1, size: 10 },
+  matchesAccount: () => true,
+  lastPackages: null, lastPackagesAt: 0,
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
   $: id => (sinks[id] || mk(id)),
   Date, Math, Number, String, Map, Array, Object, isNaN,
-  lastPackages: null, lastPackagesAt: 0,
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\nthis.renderExpirySnapshot = renderExpirySnapshot;', ctx);

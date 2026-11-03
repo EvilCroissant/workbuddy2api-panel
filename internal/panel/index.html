@@ -203,6 +203,30 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .box > header select, .box > header input { width: auto; }
 .box > header h3 { white-space: nowrap; }
 .box .pad { padding: 17px; }
+.list-tools, .list-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.list-tools { padding: 12px 17px; border-bottom: 1px solid var(--line-soft); }
+.list-tools input[type=search] { flex: 1 1 220px; min-width: 140px; width: auto; max-width: 360px; }
+.list-tools select { width: auto; max-width: 100%; }
+.list-tools .note { margin-left: auto; color: var(--ink-3); font-size: 12px; }
+.list-pager { padding: 12px 17px; border-top: 1px solid var(--line-soft); font-size: 12px; color: var(--ink-3); }
+.list-pager .page-info { flex: 1 1 180px; font-variant-numeric: tabular-nums; }
+.list-pager label { display: inline-flex; align-items: center; gap: 6px; }
+.list-pager select { width: auto; }
+#expPad { padding: 0; }
+#expList { padding: 0 17px; }
+#expBox > header { flex-wrap: wrap; }
+#expBox > header h3 { white-space: normal; }
+#expBox > header .grow { display: none; }
+#expBox > header .note { flex: 1 1 260px; white-space: normal; }
+#expBox > header button { flex: none; }
+@media (max-width: 600px) {
+  .list-tools, .list-pager { padding: 10px 12px; }
+  .list-tools input[type=search] { flex-basis: 100%; max-width: none; }
+  .list-tools .note { flex-basis: 100%; margin-left: 0; }
+  .list-pager .page-info { flex-basis: 100%; }
+  #expList { padding: 0 12px; }
+  #expBox > header .note { flex-basis: 180px; }
+}
 /* 补偿活动行：昵称 / 状态标 / 截止倒计时 / 额度 / 领取按钮，单行紧凑排布。
    沿用 .tag 体系染色（ok=已领、warn=待领、bad=临期、mute=中性信息）。 */
 .comp-row { display: flex; align-items: center; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
@@ -677,13 +701,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
            （数据来自 state.json，不经上游），「检查」按钮改为拉取逐包明细的增强入口。 -->
       <div class="box" id="expBox">
         <header>
-          <h3>积分到期提醒<span class="hint">按最近到期批次估算 · 日均需耗 = 批次剩余 ÷ 距到期天数 · 上游按失效时刻先后自动优先扣减（FEFO）</span></h3>
+          <h3 title="日均需耗 = 批次剩余 ÷ 距到期天数；上游按失效时刻先后自动优先扣减（FEFO）">积分到期提醒<span class="hint">按最近到期排序</span></h3>
           <span class="grow"></span>
           <span class="note" id="expNote"></span>
           <button class="xs" id="btnExpFold" aria-expanded="true">收起</button>
           <button class="xs" id="btnExp">检查</button>
         </header>
-        <div class="pad" id="expPad"><div id="expList"></div></div>
+        <div class="pad" id="expPad">
+          <div class="list-tools" role="group" aria-label="积分到期提醒筛选">
+            <input id="expSearch" type="search" placeholder="搜索昵称、UID 或备注" aria-label="搜索积分到期账号">
+            <select id="expRealm" aria-label="到期提醒账号地区"><option value="">全部地区</option><option value="cn">国内版</option><option value="global">国际版</option></select>
+            <select id="expRange" aria-label="积分到期范围"><option value="">全部到期情况</option><option value="3">3 天内到期</option><option value="7">7 天内到期</option><option value="none">无到期信息</option><option value="error">查询失败</option></select>
+            <button class="xs ghost" id="expReset">重置筛选</button>
+            <span class="note" id="expCount"></span>
+          </div>
+          <div id="expList"></div>
+          <div class="list-pager" role="group" aria-label="积分到期提醒分页">
+            <span class="page-info" id="expPageInfo" aria-live="polite"></span>
+            <label>每页 <select class="xs" id="expPageSize" aria-label="到期提醒每页账号数"><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option></select></label>
+            <button class="xs" id="expPrev" disabled>上一页</button><span id="expPageNumber">1 / 1</span><button class="xs" id="expNext" disabled>下一页</button>
+          </div>
+        </div>
       </div>
 
       <!-- 官方补偿活动（issue #189）：「模型服务异常额外补偿 N 积分」这类限时补偿在账号侧
@@ -713,6 +751,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnActivityAll">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
         </header>
+        <div class="list-tools" role="group" aria-label="账号池筛选">
+          <input id="accSearch" type="search" placeholder="搜索昵称、UID 或备注" aria-label="搜索账号池">
+          <select id="accRealm" aria-label="账号池地区"><option value="">全部地区</option><option value="cn">国内版</option><option value="global">国际版</option></select>
+          <select id="accStatus" aria-label="账号状态"><option value="">全部状态</option><option value="healthy">可用</option><option value="cooling">冷却中 / 熔断 / 降权</option><option value="paused">已暂停选号</option><option value="disabled">已禁用</option></select>
+          <button class="xs ghost" id="accReset">重置筛选</button>
+          <span class="note" id="accCount"></span>
+        </div>
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>
@@ -722,6 +767,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           </tr></thead>
           <tbody id="accBody"></tbody>
         </table>
+        </div>
+        <div class="list-pager" role="group" aria-label="账号池分页">
+          <span class="page-info" id="accPageInfo" aria-live="polite"></span>
+          <label>每页 <select class="xs" id="accPageSize" aria-label="账号池每页账号数"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label>
+          <button class="xs" id="accPrev" disabled>上一页</button><span id="accPageNumber">1 / 1</span><button class="xs" id="accNext" disabled>下一页</button>
         </div>
       </div>
 

@@ -7,6 +7,10 @@ let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
+let accountList = [];
+let accountListState = { q: '', realm: '', status: '', page: 1, size: 20 };
+let expiryListState = { q: '', realm: '', range: '', page: 1, size: 10 };
+let expirySource = null;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
@@ -380,15 +384,33 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+function accountStatus(s) {
+  if (s.disabled) return 'disabled';
+  if (s.paused) return 'paused';
+  const now = Date.now();
+  return (s.cool_remaining_sec > 0 || new Date(s.breaker_until || 0) > now || new Date(s.degrade_until || 0) > now)
+    ? 'cooling' : 'healthy';
+}
+function matchesAccount(s, state) {
+  const q = state.q.trim().toLowerCase();
+  return (!state.realm || (s.realm || 'cn') === state.realm) &&
+    (!q || [s.uid, s.nickname, remarkOf(s.uid)].some(v => String(v || '').toLowerCase().includes(q)));
+}
 function renderAccounts(list) {
+  accountList = list;
   const tb = $('accBody');
-  if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+  const filtered = list.filter(s => matchesAccount(s, accountListState) &&
+    (!accountListState.status || accountStatus(s) === accountListState.status));
+  const rows = pageItems(filtered, accountListState, 'acc', list.length);
+  if (!filtered.length) {
+    tb.innerHTML = '<tr><td colspan="9"><div class="empty">' + (list.length
+      ? '没有符合筛选条件的账号，可调整条件或点击「重置筛选」'
+      : '<div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号') + '</div></td></tr>';
     return;
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
-  tb.innerHTML = list.map(s => {
+  tb.innerHTML = rows.map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
@@ -3138,6 +3160,40 @@ function expBatches(packs) {
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
+// 分页只切展示列表：汇总与批量操作始终使用完整数据。刷新后收缩到合法页，
+// 正常轮询不重置页码；筛选及每页数量变化由控件显式回到第一页。
+function pageItems(list, state, prefix, total) {
+  const pages = Math.max(1, Math.ceil(list.length / state.size));
+  state.page = Math.max(1, Math.min(state.page, pages));
+  const start = (state.page - 1) * state.size;
+  const end = Math.min(start + state.size, list.length);
+  const setText = (id, value) => { const el = $(prefix + id); if (el) el.textContent = value; };
+  setText('Count', '匹配 ' + list.length + ' / 共 ' + total + ' 个账号');
+  setText('PageInfo', list.length ? '显示第 ' + (start + 1) + '–' + end + ' 个，共 ' + list.length + ' 个' : '没有可显示的账号');
+  setText('PageNumber', state.page + ' / ' + pages);
+  const prev = $(prefix + 'Prev'), next = $(prefix + 'Next');
+  if (prev) prev.disabled = state.page === 1;
+  if (next) next.disabled = state.page === pages;
+  return list.slice(start, end);
+}
+
+function filterExpiryRows(rows) {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return rows.filter(({ a, key }) => {
+    if (!matchesAccount(a, expiryListState)) return false;
+    const range = expiryListState.range;
+    if (!range) return true;
+    if (range === 'error') return !!a.error;
+    if (range === 'none') return !a.error && key === null;
+    if (a.error || key === null) return false;
+    // 新快照/实时明细使用 YYYY-MM-DD，旧快照使用时间戳；都按自然日比较。
+    const day = typeof key === 'number' ? new Date(key) : new Date(key + 'T00:00:00');
+    day.setHours(0, 0, 0, 0);
+    const days = Math.round((day - today) / 86400000);
+    return days >= 0 && days <= Number(range);
+  });
+}
+
 function expDaysLeft(dateStr, today) {
   return Math.round((new Date(dateStr + 'T00:00:00') - today) / 86400000);
 }
@@ -3178,7 +3234,8 @@ function expiryRowsHtml(list) {
     const ay = String(y.a.nickname || y.a.uid || '');
     return ax < ay ? -1 : ax > ay ? 1 : 0;
   });
-  return keyed.map(({ a }) => {
+  const visible = pageItems(filterExpiryRows(keyed), expiryListState, 'exp', list.length);
+  return visible.map(({ a }) => {
     const name = a.nickname || String(a.uid || '').slice(0, 8);
     if (a.error) {
       return '<div class="exp-row"><span class="exp-dot" style="background:var(--ink-3)"></span>' +
@@ -3216,9 +3273,10 @@ function expiryRowsHtml(list) {
 }
 
 function renderExpiry(d) {
+  expirySource = { kind: 'live', data: d };
   const list = (d.accounts || []);
   const rows = expiryRowsHtml(list);
-  $('expList').innerHTML = rows || '<div class="empty">没有账号</div>';
+  $('expList').innerHTML = rows || '<div class="empty">' + (list.length ? '没有符合筛选条件的账号，可调整条件或点击「重置筛选」' : '没有账号') + '</div>';
   // 数据新鲜度透明化：走缓存时标注年龄，免得把旧数据误当实时。
   const ageMin = lastPackages ? Math.floor((Date.now() - lastPackagesAt) / 60000) : 0;
   $('expNote').textContent = (lastPackagesAt && ageMin > 0)
@@ -3235,6 +3293,7 @@ function renderExpiry(d) {
    旧 state（升级后尚未跑过一轮余额刷新，或 Redis 快照来自旧版本）没有 buckets，
    退回只显示最早一批，保证卡片不空白；下一轮刷新后自动变成完整视图。 */
 function renderExpirySnapshot(d) {
+  expirySource = { kind: 'snapshot', data: d };
   const list = (d && d.accounts) || [];
   const hasBuckets = list.some(a => Array.isArray(a.credits_expiry_buckets) && a.credits_expiry_buckets.length);
   if (hasBuckets) {
@@ -3264,6 +3323,7 @@ function renderExpirySnapshot(d) {
         packages: packagesOf(a),
       })),
     });
+    expirySource = { kind: 'snapshot', data: d };
     $('expNote').textContent = snapshotNoteText(list.length, d);
     return;
   }
@@ -3272,7 +3332,7 @@ function renderExpirySnapshot(d) {
   const keyed = list.map(a => {
     // 后端给的是 RFC3339 带时区；无到期信息（长期包/未刷新）的账号排在最后。
     let key = null, ms = 0;
-    if (a.credits_earliest_expiry) {
+    if (a.credits_earliest_expiry && Number(a.credits_earliest_remaining) > 0) {
       const t = new Date(a.credits_earliest_expiry);
       if (!isNaN(t.getTime())) { ms = t.getTime(); key = ms; }
     }
@@ -3284,7 +3344,8 @@ function renderExpirySnapshot(d) {
     if (y.key === null) return -1;
     return x.key - y.key;
   });
-  const rows = keyed.map(({ a, ms }) => {
+  const visible = pageItems(filterExpiryRows(keyed), expiryListState, 'exp', list.length);
+  const rows = visible.map(({ a, ms }) => {
     const nm = esc(a.nickname || String(a.uid || '').slice(0, 8));
     if (!ms || !a.credits_earliest_remaining) {
       return '<div class="exp-row"><span class="exp-dot" style="background:var(--ok)"></span>' +
@@ -3309,7 +3370,7 @@ function renderExpirySnapshot(d) {
       '<div class="note">仅最早一批，点「检查」看全部到期批次</div>' +
       '</span></div>';
   }).join('');
-  $('expList').innerHTML = rows || '<div class="empty">没有账号</div>';
+  $('expList').innerHTML = rows || '<div class="empty">' + (list.length ? '没有符合筛选条件的账号，可调整条件或点击「重置筛选」' : '没有账号') + '</div>';
   $('expNote').textContent = snapshotNoteText(list.length, d);
   $('expBox').hidden = false;
 }
@@ -3354,6 +3415,40 @@ async function loadExpiry(force) {
 }
 
 if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
+
+function renderExpiryPage() {
+  if (!expirySource) return;
+  if (expirySource.kind === 'snapshot') renderExpirySnapshot(expirySource.data);
+  else renderExpiry(expirySource.data);
+}
+
+function bindListControls(prefix, state, filters, render) {
+  for (const [suffix, key] of filters) {
+    const el = $(prefix + suffix);
+    if (!el) continue;
+    const change = () => { state[key] = el.value; state.page = 1; render(); };
+    if (suffix === 'Search') el.oninput = change;
+    else el.onchange = change;
+  }
+  const size = $(prefix + 'PageSize');
+  if (size) size.onchange = () => {
+    const n = Number(size.value);
+    if (![10, 20, 50].includes(n)) return;
+    state.size = n; state.page = 1; render();
+  };
+  const prev = $(prefix + 'Prev'), next = $(prefix + 'Next'), reset = $(prefix + 'Reset');
+  if (prev) prev.onclick = () => { state.page--; render(); };
+  if (next) next.onclick = () => { state.page++; render(); };
+  if (reset) reset.onclick = () => {
+    for (const [suffix, key] of filters) {
+      state[key] = '';
+      const el = $(prefix + suffix); if (el) el.value = '';
+    }
+    state.page = 1; render();
+  };
+}
+bindListControls('acc', accountListState, [['Search', 'q'], ['Realm', 'realm'], ['Status', 'status']], () => renderAccounts(accountList));
+bindListControls('exp', expiryListState, [['Search', 'q'], ['Realm', 'realm'], ['Range', 'range']], renderExpiryPage);
 
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
