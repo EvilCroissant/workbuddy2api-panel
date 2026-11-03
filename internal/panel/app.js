@@ -566,7 +566,10 @@ async function loadOverview(quiet) {
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
     const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
-    $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    $('sCredits').innerHTML = '<span>' + creditNum(remSum) + '</span>' +
+      (totSum > 0 ? '<small class="credit-total"> / ' + creditNum(totSum) + '</small>' : '');
+    $('sCredits').title = totSum > 0 ? remSum + ' / ' + totSum : String(remSum);
+    $('sCredits').classList.toggle('is-large', Math.max(Math.abs(remSum), Math.abs(totSum)) >= 1000000);
     $('sSticky').textContent = d.sticky_sessions;
     $('navSub').textContent = 'v' + d.version;
     $('navVer').textContent = 'v' + d.version;

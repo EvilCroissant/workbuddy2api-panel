@@ -695,13 +695,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     <section class="view" id="view-accounts">
       <div class="page-heading"><div><span class="eyebrow">WORKSPACE</span><h1>账号池</h1><p>管理接入账号，掌握可用状态与积分余额。</p></div><span class="page-badge"><i></i>自动刷新</span></div>
       <div class="stats">
-        <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
-        <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
-        <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
-        <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
-        <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
-        <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
-        <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
+        <div class="stat"><div class="k">账号总数</div><div class="v" id="sTotal">-</div></div>
+        <div class="stat good"><div class="k">可用</div><div class="v" id="sHealthy">-</div></div>
+        <div class="stat warn"><div class="k">冷却中</div><div class="v" id="sCooling">-</div></div>
+        <div class="stat bad"><div class="k">已禁用</div><div class="v" id="sDisabled">-</div></div>
+        <div class="stat warn"><div class="k">已暂停选号</div><div class="v" id="sPaused">-</div></div>
+        <div class="stat"><div class="k">粘性会话</div><div class="v" id="sSticky">-</div></div>
+        <div class="stat stat-credits"><div class="k">积分剩余 / 总额</div><div class="v" id="sCredits">-</div></div>
       </div>
 
       <!-- 卡片默认可见：此前 hidden + 「仅点检查才渲染」形成死锁（按钮藏在隐藏卡片里，

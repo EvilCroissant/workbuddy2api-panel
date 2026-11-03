@@ -77,7 +77,8 @@ const load = () => vm.runInContext('loadOverview(true)', sandbox);
 (async () => {
   await load();
   assert.equal(el('sTotal').textContent, 152);
-  assert.equal(el('sCredits').textContent, '15200 / 30400');
+  assert.equal(el('sCredits').innerHTML, '<span>15,200</span><small class="credit-total"> / 30,400</small>');
+  assert.equal(el('sCredits').title, '15200 / 30400', 'exact totals remain available');
   assert.equal((el('accBody').innerHTML.match(/<tr\b/g) || []).length, 20,
     'only the first page renders even when some models are rate limited');
   assert.equal(el('accPageNumber').textContent, '1 / 8');
@@ -239,6 +240,8 @@ const load = () => vm.runInContext('loadOverview(true)', sandbox);
 
   response = { ...overview, total: 0, healthy: 0, accounts: [], model_locks: null };
   await load();
+  assert.equal(el('sCredits').innerHTML, '<span>0</span>', 'empty pools clear the previous total');
+  assert.equal(el('sCredits').title, '0');
   assert.ok(el('accBody').innerHTML.includes('账号池是空的'));
   assert.ok(el('mlBody').innerHTML.includes('当前没有模型级限流'));
   console.log('OVERVIEW OK');
