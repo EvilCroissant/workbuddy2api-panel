@@ -1,5 +1,21 @@
 # 更新记录
 
+## 2026-11-03 · v1.13.0.6
+
+### 桌面版本与主聊天请求头对齐
+
+- 国内默认 App 更新为 `5.9.3`，国际默认 App 更新为 `5.9.4`；两端 UA 均使用桌面包内置 CLI `2.165.0`，不混用独立发布的 CLI 版本。国内桌面任务与通用出站共享版本常量。
+- 国内升级接口（`platform=workbuddy-darwin-arm64&version=5.8.3`）提供 `5.9.3.42398134`；下载包 SHA256 `55d73c63e44be58e31411254d10ad141faef9fd9eaf3cab67685d81f88e14835` 与官方声明一致。国际升级接口提供 `5.9.4.42593613`，与本机安装的 App `5.9.4` 一致；国际安装包本次未另行下载校验。
+- 从桌面 client-info 环境注入追踪至内置 CLI 的 ModelProvider 与 HTTP adapter：主聊天 `Accept` 改为 `application/json`，保留请求体 `stream:true`；补齐 `X-Agent-Intent: craft`、`X-Agent-Type: main`、`X-Agent-Runtime: other`。桌面专家聊天同步 Accept 与 runtime 字段，并验证 SSE 回执仍可解析。
+- 保留 realm 对应的三段 UA、`X-IDE-Name/Type: WorkBuddy`、App 版本归属及配置覆盖；会话 / 轮次 / 消息 ID 和重放生命周期沿用现有实现。
+- `X-Private-Data` 受账号与模型优化配置影响，本次不硬编码；既有设备及兼容头保留。此项为经核对字段的增量对齐，不声明完整请求复刻。
+- 新增假上游请求回归，覆盖两端聊天 / 刷新 / 余额 / 企业模型目录，以及版本覆盖、自定义 UA、`client_name=SaaS`；检查聊天头隔离及刷新令牌只出现在刷新请求。
+- 验证通过：`go test ./...`、补充专家 SSE 与搜索请求头断言后的 `go test ./internal/upstream`、`go build ./cmd/...`、`go vet ./...`、`git diff --check`。
+
+### 验证边界
+
+- 客户端行为依据官方包静态源码；未使用真实账号验证上游聊天成功。版本及 HTTP 头变更不构成 TCP `connect: connection refused` 的修复证明。
+
 ## 2026-10-30 · v1.13.0.5
 
 ### 账号池列表空白修复

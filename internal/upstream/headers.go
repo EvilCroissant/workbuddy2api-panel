@@ -15,14 +15,15 @@ import (
 
 const (
 	// defaultClientVersionCN 国内版出站 App 版本段（UA 的 `WorkBuddy/<ver>` 与
-	// 白名单头组的 X-IDE-Version）。对齐官方 WorkBuddy 国内桌面端 5.8.2。
+	// 白名单头组的 X-IDE-Version）。2026-11-02 核对官方国内桌面端 5.9.3。
 	// config upstream.client_version 可覆盖（空 = 按 realm 取内置默认）。
-	defaultClientVersionCN = "5.8.2"
-	// defaultClientVersionGlobal 国际版出站 App 版本段。官方 WorkBuddy AI 桌面端当前为 5.8.4。
-	defaultClientVersionGlobal = "5.8.4"
-	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。官方国内/国际内置 CLI 当前均为 2.161.0。
+	defaultClientVersionCN = "5.9.3"
+	// defaultClientVersionGlobal 国际版出站 App 版本段。同期官方 WorkBuddy AI 桌面端为 5.9.4。
+	defaultClientVersionGlobal = "5.9.4"
+	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。上述两端桌面包内置 CLI 均为 2.165.0，
+	// 不采用独立发布的 CLI 版本，避免混合桌面与独立 CLI 的指纹。
 	// config upstream.cli_version 可覆盖（空 = 内置默认）。
-	defaultCliVersion = "2.161.0"
+	defaultCliVersion = "2.165.0"
 
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
@@ -62,14 +63,14 @@ func (c *Client) cliVersion() string {
 	return defaultCliVersion
 }
 
-// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方桌面端 RestOperations 层形状）：
+// defaultWorkBuddyUAFor 组装默认客户端出站 UA（桌面启动的内置 CLI 主聊天链路）：
 // `WorkBuddy/<appVersion> <applicationName>/<appVersion> CLI/<cliVersion>`。
-// 平台段（第二段）取官方 product.json 的 applicationName：
+// 第一段取桌面注入的 CLIENT_INFO_PLATFORM；第二段取 CLI product.json 的 applicationName：
 //   - CN：WorkBuddy（国内版 WorkBuddy.app）
 //   - global：workbuddy-ai（国际版 WorkBuddy AI.app；不是显示名 "WorkBuddy AI"）
 //
-// 当前官方主请求形状：CN `WorkBuddy/5.8.2 WorkBuddy/5.8.2 CLI/2.161.0`；
-// global `WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0`。
+// 当前官方主请求形状：CN `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`；
+// global `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	platform := "WorkBuddy"
 	if a != nil && a.IsGlobal() {
@@ -164,8 +165,7 @@ func (c *Client) injectAccountStableHeaders(req *http.Request, a *auth.Auth) {
 // CommonHeaders 设置所有 API 共享的请求头。
 func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Content-Type", "application/json")
-	// Accept 非流式默认 application/json（D6：去掉宽松的 text/plain, */*）。
-	// chat 流式路径在 ChatHeaders 覆盖为 event-stream。
+	// 桌面内置 CLI 的主聊天请求也使用 application/json；流式由请求体 stream 控制。
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	origin := originRefererFor(a)
@@ -217,8 +217,6 @@ type ChatMeta struct {
 // meta 为会话头族元数据，见 injectConversationHeaders。
 func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, meta ChatMeta) {
 	c.CommonHeaders(req, a)
-	// chat 流式 Accept 覆盖 CommonHeaders 的非流式默认（D6）。
-	req.Header.Set("Accept", "application/json, text/event-stream")
 	// AccessToken 加锁快照：keepalive 定时刷新会在 a.mu 内改写它，锁外直读构成数据竞争
 	// （见 auth.AccessTokenValue 注释）。
 	if at := a.AccessTokenValue(); at != "" {
@@ -252,6 +250,11 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	}
 	// 用量归属头：默认伪造 WorkBuddy 桌面端指纹（client_name="SaaS" 还原旧行为）。
 	c.injectAttribution(req, a)
+	// 桌面内置 CLI 的普通主聊天默认值。与 IDE 用量归属独立，client_name=SaaS
+	// 只关闭 IDE 归属头；不把这些聊天头注入刷新或 billing 请求。
+	req.Header.Set("X-Agent-Intent", "craft")
+	req.Header.Set("X-Agent-Type", "main")
+	req.Header.Set("X-Agent-Runtime", "other")
 	// 客户端 IP 透传（仅 PassthroughIP=true 且本次请求带 IP）。
 	c.injectClientIP(req, clientIP)
 	// 设备风控头：auth 每号 > config 全局 > 文件兜底；空则不注入。

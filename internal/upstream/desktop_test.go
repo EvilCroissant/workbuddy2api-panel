@@ -5,10 +5,39 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
+
+func TestDesktopExpertChatProfileAndStreaming(t *testing.T) {
+	const upstreamID = "cmb-0123456789abcdef0123456789abcdef"
+	c := &Client{ChatBaseCN: "https://chat.example", HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+		for key, want := range map[string]string{
+			"User-Agent": "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0",
+			"Accept":     "application/json", "X-IDE-Version": "5.9.3",
+			"X-Agent-Intent": "craft", "X-Agent-Type": "main", "X-Agent-Runtime": "other",
+			"X-Expert-Id": "expert-test",
+		} {
+			if got := r.Header.Get(key); got != want {
+				t.Errorf("%s = %q, want %q", key, got, want)
+			}
+		}
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || !body.Stream {
+			t.Errorf("expected streaming request, stream=%v err=%v", body.Stream, err)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader("data: {\"id\":\"" + upstreamID + "\"}\n\ndata: [DONE]\n\n"))}, nil
+	})}}
+	convID, requestID, err := c.DesktopChatWithExpert(&auth.Auth{UID: "expert-user", AccessToken: "at"}, "expert-test")
+	if err != nil || convID == "" || requestID != upstreamID {
+		t.Fatalf("conversation=%q request=%q err=%v", convID, requestID, err)
+	}
+}
 
 // TestReportDesktopEventFingerprint 断言桌面指纹上报：走 chatBase、UA 为桌面形状、
 // 事件数组自动注入 workbuddy-desktop 公共指纹（覆盖同名业务键）。

@@ -148,13 +148,13 @@ func TestDesktopUAForGlobalAccount(t *testing.T) {
 	global := &auth.Auth{UID: "u1", Domain: "www.workbuddy.ai"}
 	global.BackfillRealm()
 	ua := c.defaultWorkBuddyUAFor(global)
-	if want := "WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0"; ua != want {
+	if want := "WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0"; ua != want {
 		t.Errorf("global desktop UA = %q, want %q", ua, want)
 	}
-	// CN 账号使用国内版 applicationName `WorkBuddy` 与 5.8.2。
+	// CN 账号使用国内版 applicationName `WorkBuddy` 与 5.9.3。
 	cn := &auth.Auth{UID: "u2", Domain: "copilot.tencent.com"}
 	cn.BackfillRealm()
-	if want := "WorkBuddy/5.8.2 WorkBuddy/5.8.2 CLI/2.161.0"; c.defaultWorkBuddyUAFor(cn) != want {
+	if want := "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"; c.defaultWorkBuddyUAFor(cn) != want {
 		t.Errorf("cn desktop UA = %q, want %q", c.defaultWorkBuddyUAFor(cn), want)
 	}
 }

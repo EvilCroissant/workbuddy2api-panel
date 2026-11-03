@@ -742,10 +742,10 @@ type Client struct {
 	UserAgent string
 
 	// ClientVersion WorkBuddy App 版本段（出站 UA 的 `WorkBuddy/<ver>` + X-IDE-Version）。
-	// 空 = 按 realm 内置默认（CN 5.8.2 / global 5.8.4）；非空时覆盖两端。
+	// 空 = 按 realm 内置默认（CN 5.9.3 / global 5.9.4）；非空时覆盖两端。
 	ClientVersion string
 
-	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认（官方内置 CLI 2.161.0）。
+	// CliVersion 出站 UA 中 `CLI/<ver>` 段版本。空 = 内置默认（官方内置 CLI 2.165.0）。
 	CliVersion string
 
 	// ClientName 控制 X-IDE-Name/Type 的归属名（X-Product 固定 SaaS，不跟随本字段）。

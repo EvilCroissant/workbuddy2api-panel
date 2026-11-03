@@ -74,6 +74,9 @@ func TestSearchRequestShape(t *testing.T) {
 	if v := got.Get("X-Agent-Intent"); v != "craft" {
 		t.Errorf("X-Agent-Intent=%q want craft", v)
 	}
+	if v := got.Get("X-Agent-Type"); v != "main" {
+		t.Errorf("X-Agent-Type=%q want main", v)
+	}
 	if v := got.Get("X-Agent-Runtime"); v != "other" {
 		t.Errorf("X-Agent-Runtime=%q want other（2.166.0 起官方必发）", v)
 	}

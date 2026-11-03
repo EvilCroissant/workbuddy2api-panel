@@ -1,11 +1,11 @@
-// desktop.go 国内桌面客户端（WorkBuddy Desktop 5.8.2）行为指纹上报。
+// desktop.go 国内桌面客户端行为指纹上报（版本与 headers.go 的国内默认值共享）。
 //
 // 来源：2026-09-12 Sunny 抓包实测（data/desktop-task-protocol.md）。桌面端点亮
 // 「需电脑端」类任务的关键不是独立端点，而是同一 POST /v2/report 通道上
 // **不同的客户端指纹**：
 //
 //	POST https://copilot.tencent.com/v2/report        ← chatBase（CLI 上报走 billingBase）
-//	User-Agent: WorkBuddy/5.8.2 WorkBuddy/5.8.2 CLI/2.161.0
+//	User-Agent: WorkBuddy/<app> WorkBuddy/<app> CLI/<bundled-cli>
 //	X-Domain: copilot.tencent.com, X-Product: SaaS, X-User-Id: <uid>
 //	Body: [ {...event...} ]                           ← 数组
 //
@@ -39,9 +39,9 @@ import (
 const (
 	desktopReportPath    = "/v2/report"
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
-	// 当前国内版 WorkBuddy.app 的桌面 UA（App 5.8.2 内嵌 CLI 2.161.0）。
-	desktopAppVersion = "5.8.2"
-	desktopCLIVersion = "2.161.0"
+	// 与通用出站默认值共享，避免桌面任务与聊天的版本漂移。
+	desktopAppVersion = defaultClientVersionCN
+	desktopCLIVersion = defaultCliVersion
 	desktopUA         = "WorkBuddy/" + desktopAppVersion + " WorkBuddy/" + desktopAppVersion + " CLI/" + desktopCLIVersion
 )
 
@@ -442,7 +442,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	h := req.Header
 	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	h.Set("Content-Type", "application/json")
-	h.Set("Accept", "text/event-stream")
+	h.Set("Accept", "application/json")
 	h.Set("User-Agent", desktopUA)
 	h.Set("X-Domain", c.chatBase(a))
 	h.Set("X-Product", "SaaS")
@@ -450,6 +450,7 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	c.injectConversationHeaders(req, ChatMeta{ConversationID: conversationID})
 	h.Set("X-Agent-Intent", "craft")
 	h.Set("X-Agent-Type", "main")
+	h.Set("X-Agent-Runtime", "other")
 	h.Set("X-IDE-Name", "WorkBuddy")
 	h.Set("X-IDE-Type", "WorkBuddy")
 	h.Set("X-IDE-Version", desktopAppVersion)
