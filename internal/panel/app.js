@@ -1359,29 +1359,241 @@ function dismissCreatedKey() {
   $('keyCreated').hidden = true;
 }
 
-function keyModelInput(id) {
-  return Array.from(new Set($(id).value.split(/[\s,，]+/).map(s => s.trim()).filter(Boolean)));
+const KEY_MODEL_PICKERS = {
+  create: {
+    count: 'keyCreateModelCount', mode: 'keyCreateModelMode', picker: 'keyCreateModelPicker',
+    search: 'keyCreateModelSearch', clear: 'keyCreateModelClear', selected: 'keyCreateModelSelected',
+    list: 'keyCreateModelList', manual: 'keyCreateManualModel', addManual: 'keyCreateAddManual',
+    hidden: 'keyAllowedModels',
+  },
+  edit: {
+    count: 'keyEditModelCount', mode: 'keyEditModelMode', picker: 'keyEditModelPicker',
+    search: 'keyEditModelSearch', clear: 'keyEditModelClear', selected: 'keyEditModelSelected',
+    list: 'keyEditModelList', manual: 'keyEditManualModel', addManual: 'keyEditAddManual',
+    hidden: 'keyEditAllowedModels',
+  },
+};
+const keyModelPickerStates = {
+  create: { mode: 'all', selected: [], search: '', catalog: [], loading: false, loaded: false, error: '' },
+  edit: { mode: 'all', selected: [], search: '', catalog: [], loading: false, loaded: false, error: '' },
+};
+
+function normalizeKeyModelId(value) {
+  let model = String(value || '').trim();
+  if (!model || /[\s\u0000-\u001f\u007f]/.test(model)) return '';
+  if (/^global:/i.test(model)) model = 'global:' + model.slice(7);
+  else if (/^cn:/i.test(model)) model = 'cn:' + model.slice(3);
+  else model = 'cn:' + model;
+  return model === 'cn:' || model === 'global:' || model.length > 200 ? '' : model;
+}
+
+function keyModelRegion(model) {
+  if (/^global:/.test(model)) return { label: '国际', cls: 'is-global' };
+  if (/^cn:/.test(model)) return { label: '国内', cls: 'is-cn' };
+  return { label: '自定义', cls: 'is-custom' };
+}
+
+function keyModelPayload(prefix) {
+  const state = keyModelPickerStates[prefix];
+  return state && state.mode === 'selected' ? state.selected.slice() : [];
+}
+
+function keyModelSelectionValid(prefix) {
+  const state = keyModelPickerStates[prefix];
+  return !!state && (state.mode === 'all' || state.selected.length > 0);
+}
+
+function keyModelListHtml(state) {
+  if (state.loading) return '<div class="key-model-state">正在读取模型目录…</div>';
+  if (state.error) {
+    return '<div class="key-model-state is-error"><span>目录读取失败，可重试或手动添加模型 ID。</span>' +
+      '<button type="button" class="xs ghost" data-key-model-action="retry">重试</button></div>';
+  }
+  if (!state.loaded) return '<div class="key-model-state">模型目录尚未载入。</div>';
+
+  const entries = [], seen = new Set();
+  for (const raw of state.catalog) {
+    const id = normalizeKeyModelId(raw && raw.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    entries.push({ id, name: String(raw && raw.name || ''), unknown: false });
+  }
+  for (const id of state.selected) {
+    if (!seen.has(id)) entries.push({ id, name: '目录中未找到，仍保留原授权', unknown: true });
+  }
+  if (!entries.length) return '<div class="key-model-state">模型目录为空，可通过下方手动添加。</div>';
+
+  const query = state.search.trim().toLowerCase();
+  const selected = new Set(state.selected);
+  const filtered = entries.filter(item =>
+    !query || item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query));
+  if (!filtered.length) return '<div class="key-model-state">没有匹配的模型。</div>';
+
+  return filtered.map(item => {
+    const region = keyModelRegion(item.id);
+    return '<label class="key-model-option" title="' + esc(item.id) + '">' +
+      '<input type="checkbox" data-key-model-id="' + esc(item.id) + '"' +
+      (selected.has(item.id) ? ' checked' : '') + '>' +
+      '<span class="key-model-option-main"><code>' + esc(item.id) + '</code>' +
+      (item.name ? '<small>' + esc(item.name) + '</small>' : '') + '</span>' +
+      '<span class="key-model-region ' + region.cls + '">' + region.label + '</span></label>';
+  }).join('');
+}
+
+function renderKeyModelPicker(prefix) {
+  const cfg = KEY_MODEL_PICKERS[prefix], state = keyModelPickerStates[prefix];
+  if (!cfg || !state) return;
+  const mode = $(cfg.mode), count = $(cfg.count), picker = $(cfg.picker);
+  if (!mode || !count || !picker) return;
+  mode.querySelectorAll('button[data-key-model-mode]').forEach(button => {
+    const on = button.dataset.keyModelMode === state.mode;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', String(on));
+  });
+  picker.hidden = state.mode !== 'selected';
+  $(cfg.hidden).value = keyModelPayload(prefix).join('\n');
+  count.textContent = state.mode === 'all' ? '全部模型' : state.selected.length ? state.selected.length + ' 个模型' : '未选择';
+  count.classList.toggle('has-selection', state.mode === 'selected' && state.selected.length > 0);
+  if (state.mode !== 'selected') return;
+
+  $(cfg.search).value = state.search;
+  const selectedHost = $(cfg.selected);
+  selectedHost.hidden = state.selected.length === 0;
+  selectedHost.innerHTML = state.selected.map(model =>
+    '<button type="button" class="key-model-chip" data-key-model-remove="' + esc(model) +
+    '" title="移除 ' + esc(model) + '"><span>' + esc(model) +
+    '</span><i aria-hidden="true">&times;</i></button>').join('');
+  $(cfg.clear).disabled = state.selected.length === 0;
+  $(cfg.list).innerHTML = keyModelListHtml(state);
+}
+
+function resetKeyModelPicker(prefix) {
+  const state = keyModelPickerStates[prefix];
+  if (!state) return;
+  state.mode = 'all';
+  state.selected = [];
+  state.search = '';
+  renderKeyModelPicker(prefix);
+}
+
+function setKeyModelValue(prefix, models, mode) {
+  const state = keyModelPickerStates[prefix];
+  if (!state) return;
+  const selected = [];
+  for (const value of Array.isArray(models) ? models : []) {
+    const model = normalizeKeyModelId(value);
+    if (model && !selected.includes(model)) selected.push(model);
+  }
+  state.selected = selected;
+  state.mode = mode || (selected.length ? 'selected' : 'all');
+  state.search = '';
+  renderKeyModelPicker(prefix);
+}
+
+function setKeyModelMode(prefix, mode) {
+  const state = keyModelPickerStates[prefix];
+  if (!state || (mode !== 'all' && mode !== 'selected')) return;
+  state.mode = mode;
+  if (mode === 'all') state.selected = [];
+  renderKeyModelPicker(prefix);
+}
+
+function setKeyModelChecked(prefix, model, checked) {
+  const state = keyModelPickerStates[prefix], id = normalizeKeyModelId(model);
+  if (!state || !id) return;
+  state.mode = 'selected';
+  const at = state.selected.indexOf(id);
+  if (checked && at < 0 && state.selected.length >= 128) {
+    toast('每个 Key 最多允许 128 个模型', 'err');
+    return;
+  }
+  if (checked && at < 0) state.selected.push(id);
+  if (!checked && at >= 0) state.selected.splice(at, 1);
+  renderKeyModelPicker(prefix);
+}
+
+function addKeyModelManual(prefix) {
+  const cfg = KEY_MODEL_PICKERS[prefix], state = keyModelPickerStates[prefix];
+  if (!cfg || !state) return false;
+  const input = $(cfg.manual), model = normalizeKeyModelId(input.value);
+  if (!model) {
+    input.focus();
+    toast('模型 ID 需为 1–200 个非空白字符', 'err');
+    return false;
+  }
+  state.mode = 'selected';
+  if (!state.selected.includes(model) && state.selected.length >= 128) {
+    toast('每个 Key 最多允许 128 个模型', 'err');
+    return false;
+  }
+  if (!state.selected.includes(model)) state.selected.push(model);
+  input.value = '';
+  renderKeyModelPicker(prefix);
+  $(cfg.search).focus();
+  return true;
 }
 
 async function loadKeyModelCatalog() {
-  try {
-    if (!keyModelCatalog) keyModelCatalog = api('models').then(d => d.models || []).catch(e => { keyModelCatalog = null; throw e; });
-    const models = await keyModelCatalog;
-    const options = '<option value="">从模型目录添加…</option>' + models.map(m =>
-      '<option value="' + esc(m.id) + '">' + esc(m.id + (m.name ? ' · ' + m.name : '')) + '</option>').join('');
-    $('keyModelPick').innerHTML = options;
-    $('keyEditModelPick').innerHTML = options;
-  } catch (e) {
-    for (const id of ['keyModelPick', 'keyEditModelPick']) $(id).innerHTML = '<option value="">目录读取失败，可手动填写模型 ID</option>';
+  for (const state of Object.values(keyModelPickerStates)) {
+    state.loading = true;
+    state.error = '';
   }
+  for (const prefix of Object.keys(KEY_MODEL_PICKERS)) renderKeyModelPicker(prefix);
+  try {
+    if (!keyModelCatalog) keyModelCatalog = api('models').then(d => Array.isArray(d.models) ? d.models : []);
+    const models = await keyModelCatalog;
+    for (const state of Object.values(keyModelPickerStates)) {
+      state.catalog = models;
+      state.loading = false;
+      state.loaded = true;
+      state.error = '';
+    }
+  } catch (e) {
+    keyModelCatalog = null;
+    for (const state of Object.values(keyModelPickerStates)) {
+      state.loading = false;
+      state.loaded = false;
+      state.error = e && e.message ? e.message : '读取失败';
+    }
+  }
+  for (const prefix of Object.keys(KEY_MODEL_PICKERS)) renderKeyModelPicker(prefix);
 }
 
-for (const [picker, input] of [['keyModelPick', 'keyAllowedModels'], ['keyEditModelPick', 'keyEditAllowedModels']]) {
-  $(picker).onchange = () => {
-    const model = $(picker).value;
-    if (!model) return;
-    $(input).value = Array.from(new Set([...keyModelInput(input), model])).join('\n');
-    $(picker).value = '';
+for (const [prefix, cfg] of Object.entries(KEY_MODEL_PICKERS)) {
+  $(cfg.mode).onclick = ev => {
+    const button = ev.target.closest('button[data-key-model-mode]');
+    if (!button) return;
+    setKeyModelMode(prefix, button.dataset.keyModelMode);
+    if (prefix === 'edit' && button.dataset.keyModelMode === 'selected') $(cfg.search).focus();
+  };
+  $(cfg.search).oninput = () => {
+    keyModelPickerStates[prefix].search = $(cfg.search).value;
+    renderKeyModelPicker(prefix);
+  };
+  $(cfg.clear).onclick = () => {
+    keyModelPickerStates[prefix].selected = [];
+    renderKeyModelPicker(prefix);
+    $(cfg.search).focus();
+  };
+  $(cfg.selected).onclick = ev => {
+    const button = ev.target.closest('button[data-key-model-remove]');
+    if (button) setKeyModelChecked(prefix, button.dataset.keyModelRemove, false);
+  };
+  $(cfg.list).onchange = ev => {
+    const checkbox = ev.target.closest('input[data-key-model-id]');
+    if (checkbox) setKeyModelChecked(prefix, checkbox.dataset.keyModelId, checkbox.checked);
+  };
+  $(cfg.list).onclick = ev => {
+    const button = ev.target.closest('button[data-key-model-action="retry"]');
+    if (!button) return;
+    keyModelCatalog = null;
+    loadKeyModelCatalog();
+  };
+  $(cfg.addManual).onclick = () => addKeyModelManual(prefix);
+  $(cfg.manual).onkeydown = ev => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    addKeyModelManual(prefix);
   };
 }
 
@@ -1390,10 +1602,15 @@ $('keyModelForm').onsubmit = async ev => {
   ev.preventDefault();
   const id = keyModelEditingId, epoch = keyViewEpoch;
   if (!id) return;
+  if (!keyModelSelectionValid('edit')) {
+    $('keyEditModelSearch').focus();
+    toast('请至少选择一个模型，或切换为全部模型', 'err');
+    return;
+  }
   const button = $('btnKeyModelSave');
   button.disabled = true;
   try {
-    await api('keys/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ allowed_models: keyModelInput('keyEditAllowedModels') }) });
+    await api('keys/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ allowed_models: keyModelPayload('edit') }) });
     if (view !== 'keys' || epoch !== keyViewEpoch) return;
     if (keyModelEditingId === id) { $('keyModelEditor').hidden = true; keyModelEditingId = ''; }
     toast('模型权限已保存', 'ok');
@@ -1862,17 +2079,22 @@ $('keyCreateForm').onsubmit = async ev => {
   if (!$('keyCreated').hidden) { toast('请先保存当前新 Key 并关闭提示', 'err'); return; }
   const name = $('keyName').value.trim();
   if (!name) { $('keyName').focus(); return; }
+  if (!keyModelSelectionValid('create')) {
+    $('keyCreateModelSearch').focus();
+    toast('请至少选择一个模型，或切换为全部模型', 'err');
+    return;
+  }
   $('btnKeyCreate').disabled = true;
   try {
     const epoch = keyViewEpoch, secretSeq = ++keySecretSeq;
-    const d = await api('keys', { method: 'POST', body: JSON.stringify({ name, allowed_models: keyModelInput('keyAllowedModels') }) });
+    const d = await api('keys', { method: 'POST', body: JSON.stringify({ name, allowed_models: keyModelPayload('create') }) });
     if (view !== 'keys' || epoch !== keyViewEpoch || secretSeq !== keySecretSeq) return;
     $('keySecretTitle').textContent = '密钥已创建 · ' + name;
     $('keySecret').value = d.secret;
     $('keyCreated').hidden = false;
     $('keyComposer').hidden = true;
     $('keyName').value = '';
-    $('keyAllowedModels').value = '';
+    resetKeyModelPicker('create');
     keyListState.page = 1;
     await loadKeys();
   } catch (e) { toast('生成失败：' + e.message, 'err'); await loadKeys(); }
@@ -1890,10 +2112,11 @@ $('keysBody').onclick = async ev => {
   if (action === 'models') {
     keyModelEditingId = id;
     $('keyModelEditorName').textContent = key.name;
-    $('keyEditAllowedModels').value = (key.allowed_models || []).join('\n');
+    setKeyModelValue('edit', key.allowed_models || []);
     $('keyModelEditor').hidden = false;
-    $('keyEditAllowedModels').focus();
     loadKeyModelCatalog();
+    if (keyModelPickerStates.edit.mode === 'selected') $('keyEditModelSearch').focus();
+    else $('btnKeyModelSave').focus();
     return;
   }
   if (action === 'rotate' && !confirm('旧版 Key 仅保存摘要。重新生成「' + key.name + '」后旧 Key 立即失效，需更新客户端；模型权限和用量记录保留。继续？')) return;
@@ -1935,11 +2158,16 @@ $('keyRange').onclick = ev => {
 };
 $('btnKeyOpen').onclick = () => {
   if (!$('keyCreated').hidden) { $('keySecret').focus(); toast('请先保存当前新 Key 并关闭提示', 'err'); return; }
+  resetKeyModelPicker('create');
   $('keyComposer').hidden = false;
   $('keyName').focus();
   loadKeyModelCatalog();
 };
-$('btnKeyCancel').onclick = () => { $('keyComposer').hidden = true; $('keyName').value = ''; $('keyAllowedModels').value = ''; };
+$('btnKeyCancel').onclick = () => {
+  $('keyComposer').hidden = true;
+  $('keyName').value = '';
+  resetKeyModelPicker('create');
+};
 $('btnKeyDismiss').onclick = dismissCreatedKey;
 $('btnKeyCopy').onclick = () => navigator.clipboard.writeText($('keySecret').value)
   .then(() => toast('Key 已复制', 'ok'), () => { $('keySecret').focus(); $('keySecret').select(); toast('请手动复制已选中的 Key', 'err'); });
