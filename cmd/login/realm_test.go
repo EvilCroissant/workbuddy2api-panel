@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -146,16 +148,27 @@ func TestBuildLoginOutputRealmAlwaysSet(t *testing.T) {
 		name      string
 		realm     string
 		domain    string
+		issuer    string
 		wantRealm string
 	}{
-		{name: "显式 global 优先", realm: "global", domain: "www.codebuddy.cn", wantRealm: "global"},
-		{name: "显式 cn 优先", realm: "cn", domain: "www.workbuddy.ai", wantRealm: "cn"},
+		{name: "issuer global overrides selected cn", realm: "cn", domain: "www.workbuddy.cn", issuer: "https://www.codebuddy.ai/auth/realms/copilot", wantRealm: "global"},
+		{name: "issuer cn overrides selected global", realm: "global", domain: "www.workbuddy.ai", issuer: "https://www.workbuddy.cn/auth/realms/copilot", wantRealm: "cn"},
+		{name: "显式 global 优先于 domain", realm: "global", domain: "www.codebuddy.cn", wantRealm: "global"},
+		{name: "显式 cn 优先于 domain", realm: "cn", domain: "www.workbuddy.ai", wantRealm: "cn"},
 		{name: "缺省按 domain 推断 global", realm: "", domain: "www.workbuddy.ai", wantRealm: "global"},
 		{name: "缺省空 domain 回落 cn", realm: "", domain: "", wantRealm: "cn"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tok.Domain = c.domain
+			tok.AccessToken = "at"
+			if c.issuer != "" {
+				payload, err := json.Marshal(map[string]string{"iss": c.issuer})
+				if err != nil {
+					t.Fatal(err)
+				}
+				tok.AccessToken = "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+			}
 			out := buildLoginOutput(tok, c.realm, acct)
 			m, ok := out["realm"].(string)
 			if !ok {

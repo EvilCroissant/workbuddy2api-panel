@@ -291,12 +291,16 @@ func buildLoginOutput(tok struct {
 	EnterpriseID string `json:"enterpriseId"`
 	Nickname     string `json:"nickname"`
 }) map[string]any {
+	resolvedRealm := auth2.ResolveRealm(realm, tok.Domain)
+	if issuerRealm, ok := auth2.RealmFromIssuer(tok.AccessToken); ok {
+		resolvedRealm = issuerRealm
+	}
 	return map[string]any{
 		"access_token":  tok.AccessToken,
 		"refresh_token": tok.RefreshToken,
 		"expires_in":    tok.ExpiresIn,
 		"domain":        tok.Domain,
-		"realm":         auth2.ResolveRealm(realm, tok.Domain),
+		"realm":         resolvedRealm,
 		"uid":           acct.UID,
 		"enterprise_id": acct.EnterpriseID,
 		"nickname":      acct.Nickname,

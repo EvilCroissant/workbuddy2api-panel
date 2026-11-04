@@ -143,6 +143,38 @@ func ResolveRealm(explicit, domain string) string {
 	return "cn"
 }
 
+// RealmFromIssuer 从 access token 的 JWT payload 中读取 issuer，并只对已知签发方
+// 返回地区。此处解析声明，不执行 JWT 签名验证；调用方应将它作为导入凭证的地区线索。
+func RealmFromIssuer(token string) (string, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if raw, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return "", false
+		}
+	}
+	var claims struct {
+		Issuer string `json:"iss"`
+	}
+	if err := json.Unmarshal(raw, &claims); err != nil {
+		return "", false
+	}
+	switch claims.Issuer {
+	case "https://www.workbuddy.ai/auth/realms/copilot",
+		"https://www.codebuddy.ai/auth/realms/copilot":
+		return "global", true
+	case "https://www.workbuddy.cn/auth/realms/copilot",
+		"https://www.codebuddy.cn/auth/realms/copilot",
+		"https://copilot.tencent.com/auth/realms/copilot":
+		return "cn", true
+	default:
+		return "", false
+	}
+}
+
 // BackfillRealm 为缺省 realm 标识的账号持久化补标识：a.realm 为空时按「原始 domain 推断」
 // 写回（cn/global），返回 (是否有变更, 归一化后的 realm)。已有标识不动（幂等）。
 //

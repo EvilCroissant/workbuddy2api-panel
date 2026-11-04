@@ -1,10 +1,52 @@
 package auth
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func tokenWithIssuer(t *testing.T, issuer string) string {
+	t.Helper()
+	payload, err := json.Marshal(map[string]string{"iss": issuer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return "e30." + base64.RawURLEncoding.EncodeToString(payload) + ".sig"
+}
+
+func TestRealmFromIssuer(t *testing.T) {
+	cases := []struct {
+		issuer string
+		want   string
+	}{
+		{"https://www.workbuddy.ai/auth/realms/copilot", "global"},
+		{"https://www.codebuddy.ai/auth/realms/copilot", "global"},
+		{"https://www.workbuddy.cn/auth/realms/copilot", "cn"},
+		{"https://www.codebuddy.cn/auth/realms/copilot", "cn"},
+		{"https://copilot.tencent.com/auth/realms/copilot", "cn"},
+		{"https://unknown.example/auth/realms/copilot", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.issuer, func(t *testing.T) {
+			got, ok := RealmFromIssuer(tokenWithIssuer(t, tc.issuer))
+			if tc.want == "" {
+				if ok || got != "" {
+					t.Fatalf("RealmFromIssuer()=(%q,%v), want unknown", got, ok)
+				}
+				return
+			}
+			if !ok || got != tc.want {
+				t.Fatalf("RealmFromIssuer()=(%q,%v), want (%q,true)", got, ok, tc.want)
+			}
+		})
+	}
+	if got, ok := RealmFromIssuer("not-a-jwt"); ok || got != "" {
+		t.Fatalf("non-JWT RealmFromIssuer()=(%q,%v), want unknown", got, ok)
+	}
+}
 
 // withGlobalEnabled 临时打开 global realm 开关（生产缺省即开，此辅助仅显式确保），
 // 测试结束复位为开启态（缺省）。

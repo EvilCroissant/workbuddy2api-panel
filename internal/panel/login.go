@@ -187,6 +187,11 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"done": false, "message": "waiting for login"})
 		return
 	}
+	// 登录入口选择决定授权端点；最终账号归属以 access token 的已知 issuer 为准。
+	realm := sess.realm
+	if issuerRealm, ok := auth.RealmFromIssuer(tok.AccessToken); ok {
+		realm = issuerRealm
+	}
 
 	// 完成：取 uid/nickname（失败不阻塞，仅缺展示名）。
 	var acct struct {
@@ -225,7 +230,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		FilePath:     filepath.Join(p.cfg.AuthDir, fmt.Sprintf("workbuddy-%s.json", acct.UID)),
 	}
 	// global 登录：落盘 auth.realm=global（Realm() 按此判域；不写则依赖 domain 后缀回落）。
-	if sess.realm == "global" {
+	if realm == "global" {
 		if _, err := auth.BackfillRealmFor(a, "global"); err != nil {
 			writeErr(w, http.StatusInternalServerError, "set realm: "+err.Error())
 			return
@@ -247,7 +252,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	checkinMsg := ""
 	remain := int64(-1)
 	total := int64(0)
-	if sess.realm == "global" {
+	if realm == "global" {
 		// 注册激活（幂等）：region required 时自动补地区（白名单首个，HK）后重新激活。
 		// 失败不阻断登录结果（auth 已落盘），只在返回字段里体现。
 		if activated, err := p.cfg.Upstream.GlobalCompleteRegistration(a); err != nil {
@@ -279,7 +284,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 	p.loginMu.Lock()
 	delete(p.logins, state)
 	p.loginMu.Unlock()
-	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, sess.realm)
+	log.Printf("panel: 新账号已热加载 uid=%s nickname=%q realm=%s（免重启生效）", acct.UID, acct.Nickname, realm)
 	// 企业切换会话预警：该形态下 /v2/report 行为事件被上游静默丢弃（200 不计分），
 	// 成长任务全部无法点亮（签到/列表/额度/领养照常）。当场给出修复路径，
 	// 避免用户事后对着「已上报但进度 0/x」排查（见 auth.IsEnterpriseSession）。
@@ -290,7 +295,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		"done":            true,
 		"uid":             acct.UID,
 		"nickname":        acct.Nickname,
-		"realm":           sess.realm,
+		"realm":           realm,
 		"credits":         remain,
 		"credits_total":   total,
 		"checkin_message": checkinMsg,

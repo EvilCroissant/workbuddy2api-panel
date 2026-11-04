@@ -56,6 +56,9 @@ input, select { border-radius: 7px; background: var(--surface); font-size: 13px;
 input::placeholder { color: var(--ink-3); opacity: .8; }
 input:focus, select:focus { box-shadow: 0 0 0 3px var(--accent-soft); }
 input[type=checkbox] { min-height: auto; }
+.realm-opt input[type=radio] { width: 16px; min-height: 16px; height: 16px; padding: 0; flex: none; }
+.list-tools select { min-height: 32px; height: 32px; padding: 4px 9px; font-size: 12px; }
+.list-tools button.xs { min-height: 32px; padding: 4px 10px; font-size: 12px; }
 .box { border-radius: 10px; margin-bottom: 24px; }
 .box > header { padding: 17px 20px; }
 .box > header h3 { font-size: 14px; font-weight: 600; letter-spacing: -.15px; }
