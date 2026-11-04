@@ -42,7 +42,7 @@ func TestKeyManagementAndAdminIsolation(t *testing.T) {
 	if created.Secret == "" || created.Key.ID == "" {
 		t.Fatal("missing new key")
 	}
-	for _, path := range []string{"keys", "config", "overview", "logs", "login/regions"} {
+	for _, path := range []string{"keys", "keys/" + created.Key.ID + "/secret", "config", "overview", "logs", "login/regions"} {
 		if w := call("GET", path, created.Secret, ""); w.Code != 401 {
 			t.Fatalf("distributed key accessed %s: %d", path, w.Code)
 		}
@@ -51,6 +51,7 @@ func TestKeyManagementAndAdminIsolation(t *testing.T) {
 		{"POST", "keys", `{"name":"escalate"}`},
 		{"PATCH", "keys/" + created.Key.ID, `{"enabled":false}`},
 		{"DELETE", "keys/" + created.Key.ID, ""},
+		{"POST", "keys/" + created.Key.ID + "/rotate", ""},
 		{"POST", "config", `{"api_key":"hijack"}`},
 	} {
 		if w := call(c.method, c.path, created.Secret, c.body); w.Code != 401 {
@@ -103,5 +104,61 @@ func TestKeyManagementAndAdminIsolation(t *testing.T) {
 	live.Store(livecfg.Snapshot{})
 	if w := call("POST", "keys", "", `{"name":"Alice"}`); w.Code != 409 {
 		t.Fatal("created key without administrator credential")
+	}
+}
+
+func TestKeyModelManagementAndSecretRetrieval(t *testing.T) {
+	keys, err := httpauth.OpenKeys(filepath.Join(t.TempDir(), "keys.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{Keys: keys, APIKey: "admin"})
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/panel/api/"+path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer admin")
+		w := httptest.NewRecorder()
+		p.ServeHTTP(w, r)
+		return w
+	}
+	w := call("POST", "keys", `{"name":"client","allowed_models":["glm-5.2"]}`)
+	if w.Code != 201 {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		Key    httpauth.KeyInfo `json:"key"`
+		Secret string           `json:"secret"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	path := "keys/" + created.Key.ID
+	w = call("GET", path+"/secret", "")
+	if w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" || !strings.Contains(w.Body.String(), created.Secret) {
+		t.Fatalf("reveal: %d %s", w.Code, w.Body.String())
+	}
+	w = call("PATCH", path, `{"allowed_models":["global:glm-5.2"]}`)
+	if w.Code != 200 || keys.AllowsModel(created.Key.ID, "cn", "glm-5.2") || !keys.AllowsModel(created.Key.ID, "global", "glm-5.2") {
+		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+	w = call("PATCH", path, `{"allowed_models":["bad model"]}`)
+	if w.Code != 400 || !keys.AllowsModel(created.Key.ID, "global", "glm-5.2") {
+		t.Fatal("invalid policy changed permissions")
+	}
+	w = call("POST", path+"/rotate", "")
+	var rotated struct {
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &rotated); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || rotated.Secret == "" || rotated.Secret == created.Secret {
+		t.Fatalf("rotation: %d", w.Code)
+	}
+	if !keys.AllowsModel(created.Key.ID, "global", "glm-5.2") {
+		t.Fatal("rotation lost policy")
+	}
+	w = call("GET", "keys", "")
+	if strings.Contains(w.Body.String(), rotated.Secret) || strings.Contains(w.Body.String(), "encrypted_secret") {
+		t.Fatal("list leaked key secret")
 	}
 }

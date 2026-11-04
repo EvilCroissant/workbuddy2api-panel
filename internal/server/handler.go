@@ -213,6 +213,13 @@ func isSearchPath(path string) bool {
 	return path == "/v1/search/messages"
 }
 
+type distributedKeyContext struct{}
+
+func distributedKeyID(r *http.Request) string {
+	id, _ := r.Context().Value(distributedKeyContext{}).(string)
+	return id
+}
+
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := h.loadLive().APIKey
@@ -223,6 +230,7 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			var id string
 			id, valid = httpauth.IdentifyAPI(r, key, h.cfg.Keys)
 			if valid {
+				r = r.WithContext(context.WithValue(r.Context(), distributedKeyContext{}, id))
 				if tr := requestTraceFrom(r); tr != nil {
 					tr.keyID = id
 				}
@@ -335,9 +343,18 @@ const (
 // models 返回模型列表：纯动态（缓存 10min），失败/无号返回空列表（无静态兜底——
 // 拉不出目录即意味着上游不可用，假名单只会让客户端选到 11102 的模型）。
 func (h *Handler) models(w http.ResponseWriter, r *http.Request) {
+	models := h.modelList()
+	filtered := make([]map[string]any, 0, len(models))
+	for _, model := range models {
+		id, _ := model["id"].(string)
+		realm, bare := resolveModel(id)
+		if h.cfg.Keys.AllowsModel(distributedKeyID(r), realm, bare) {
+			filtered = append(filtered, model)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
-		"data":   h.modelList(),
+		"data":   filtered,
 	})
 }
 
@@ -617,7 +634,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 语义 = 「裸名不绑定单一域」：首选域（裸名默认 cn）选不到可用号（账号级冷却/熔断/
 	// 在途占满，或该域账号对这个模型 11102 后进入模型级负缓存）时，改用另一域再选一次；
 	// 显式 cn:/global: 前缀保持原语义，永不回退。
-	crossRealm := !realmExplicit && h.cfg.Pool.CrossDomainFallback()
+	crossRealm := !realmExplicit && h.cfg.Pool.CrossDomainFallback() &&
+		h.cfg.Keys.AllowsModel(distributedKeyID(r), otherRealm(realm), bareModel)
 
 	// 请求级统计：出口即打一行表格日志（任何路径都会走到）。
 	st := newChatStat(time.Now(), body, peek.Stream)
@@ -628,6 +646,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
 	}
 	defer st.done()
+	if !h.cfg.Keys.AllowsModel(distributedKeyID(r), realm, bareModel) {
+		writeOpenAIError(w, http.StatusForbidden, "model_not_allowed", "this API key is not allowed to use the requested model")
+		st.status = http.StatusForbidden
+		st.outcome = reqlog.OutcomeHTTPError
+		return
+	}
 
 	// models.hidden 黑名单：点名调用直接拒绝，不打上游、不占选号。
 	// 与 /v1/models 的列表过滤对称（只藏列表不够，知道名字仍可硬调）。

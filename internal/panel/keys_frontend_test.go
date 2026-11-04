@@ -41,9 +41,14 @@ sandbox.fetch = async (url, opts) => {
   if(failed) return {ok:false,status:500,json:async()=>({error:'disk failed'})};
   let data={}; const method=opts.method||'GET';
   if(url.startsWith('/panel/api/keys?hours=') && method==='GET') data={keys,available,admin_configured:admin,usage_available:usageAvailable,usage};
-  else if(method==='POST') {posts++; const k={id:'created',name:JSON.parse(opts.body).name,prefix:'sk-wb-new',enabled:true,created_at:'2026-11-03T11:00:00Z'};
+  else if(url==='/panel/api/models') data={models:[{id:'cn:glm-5.2',name:'GLM'},{id:'global:other',name:'Other'}]};
+  else if(method==='GET' && url.endsWith('/secret')) data={secret:'sk-wb-new-secret'};
+  else if(method==='POST' && url.endsWith('/rotate')) {
+    const id=url.split('/').at(-2);keys=keys.map(k=>k.id===id?{...k,secret_available:true}:k);data={secret:'sk-wb-rotated-secret'};
+  }
+  else if(method==='POST') {posts++; const k={id:'created',name:JSON.parse(opts.body).name,allowed_models:JSON.parse(opts.body).allowed_models,secret_available:true,prefix:'sk-wb-new',enabled:true,created_at:'2026-11-03T11:00:00Z'};
     keys=[k,...keys];data={key:k,secret:'sk-wb-new-secret'};}
-  else if(method==='PATCH') keys=keys.map(k=>k.id===url.split('/').pop()?{...k,enabled:JSON.parse(opts.body).enabled}:k);
+  else if(method==='PATCH') keys=keys.map(k=>k.id===url.split('/').pop()?{...k,...JSON.parse(opts.body)}:k);
   else if(method==='DELETE') keys=keys.filter(k=>k.id!==url.split('/').pop());
   return {ok:true,status:method==='POST'?201:200,json:async()=>JSON.parse(JSON.stringify(data))};
 };
@@ -80,12 +85,25 @@ const keyRow = id => {
   assert.equal(run('keyListState.page'),1);
   assert.ok(el('keysCount').textContent.includes('22 / 共 45'));
   el('keysStatus').value='';el('keysStatus').onchange();
-  el('keyName').value='New person';await el('keyCreateForm').onsubmit({preventDefault(){}});
+  el('keyName').value='New person';el('keyAllowedModels').value='cn:glm-5.2, global:other';await el('keyCreateForm').onsubmit({preventDefault(){}});
   assert.equal(posts,1);assert.equal(el('keySecret').value,'sk-wb-new-secret');assert.equal(el('keyCreated').hidden,false);
+  assert.deepEqual(keys[0].allowed_models,['cn:glm-5.2','global:other']);
+  assert.match(keyRow('created'),/允许 2 个模型/);
+  assert.match(keyRow('created'),/data-key-action="reveal"/);
   assert.ok(!el('keysBody').innerHTML.includes('sk-wb-new-secret'));
   await el('keyCreateForm').onsubmit({preventDefault(){}});assert.equal(posts,1,'unacknowledged secret is preserved');
   await el('btnKeyCopy').onclick();
   el('btnKeyDismiss').onclick();assert.equal(el('keySecret').value,'');assert.equal(el('keyCreated').hidden,true);
+  await click('created','reveal');assert.equal(el('keySecret').value,'sk-wb-new-secret');
+  assert.equal(el('keyCreated').hidden,false);el('btnKeyDismiss').onclick();
+  await click('created','models');assert.equal(el('keyModelEditor').hidden,false);
+  assert.equal(el('keyEditAllowedModels').value,'cn:glm-5.2\nglobal:other');
+  el('keyEditAllowedModels').value='global:other';await el('keyModelForm').onsubmit({preventDefault(){}});
+  assert.deepEqual(keys[0].allowed_models,['global:other']);assert.equal(el('keyModelEditor').hidden,true);
+  await click('created','models');el('keyEditAllowedModels').value='';await el('keyModelForm').onsubmit({preventDefault(){}});
+  assert.deepEqual(keys[0].allowed_models,[]);assert.match(keyRow('created'),/全部模型/);
+  await click('id-0','rotate');assert.equal(keys.find(k=>k.id==='id-0').secret_available,true);
+  assert.equal(el('keySecret').value,'sk-wb-rotated-secret');el('btnKeyDismiss').onclick();
   await click('created','disable');assert.equal(keys[0].enabled,false);
   await click('created','enable');assert.equal(keys[0].enabled,true);
   await click('created','delete');assert.equal(keys.length,45);

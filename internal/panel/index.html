@@ -1010,17 +1010,25 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <header><div><h3>创建 API 密钥</h3><p class="section-description">为密钥添加一个便于识别的名称。</p></div><span class="grow"></span><button type="button" class="xs ghost" id="btnKeyCancel">取消</button></header>
         <div class="pad">
           <form id="keyCreateForm">
-            <label class="fld"><span class="lb">使用人 / 用途</span><input id="keyName" required maxlength="80" placeholder="例如：小张 · Cherry Studio" autocomplete="off"><span class="hint">仅用于识别使用人，共享账号池和模型权限。</span></label>
+            <label class="fld"><span class="lb">使用人 / 用途</span><input id="keyName" required maxlength="80" placeholder="例如：小张 · Cherry Studio" autocomplete="off"><span class="hint">仅用于识别使用人，共享账号池。</span></label>
+            <label class="fld"><span class="lb">允许使用的模型</span><select id="keyModelPick" aria-label="添加允许的模型"><option value="">从模型目录添加…</option></select><textarea id="keyAllowedModels" rows="3" placeholder="留空允许全部模型；每行一个模型 ID，例如 cn:glm-5.2" spellcheck="false"></textarea><span class="hint">也可用逗号分隔；裸名按国内版处理，国际版使用 global: 前缀。搜索工具独立可用。</span></label>
             <button type="submit" class="primary" id="btnKeyCreate" disabled>生成分发 Key</button>
           </form>
         </div>
       </div>
           <div class="box key-secret-card" id="keyCreated" hidden>
-            <div class="pad"><span class="secret-success">密钥已创建</span><h3>复制并保存你的 API Key</h3><p class="section-description">完整密钥仅显示一次，关闭后可删除并重新生成。</p>
-            <label class="fld"><span class="lb">新 Key</span><input id="keySecret" readonly autocomplete="off" spellcheck="false"></label>
+            <div class="pad"><span class="secret-success" id="keySecretTitle">密钥已创建</span><h3>查看与复制 API Key</h3><p class="section-description">关闭后可通过列表中的「查看」再次打开。</p>
+            <label class="fld"><span class="lb">完整 Key</span><input id="keySecret" readonly autocomplete="off" spellcheck="false"></label>
             <div class="secret-actions"><button type="button" class="primary" id="btnKeyCopy">复制 Key</button>
             <button type="button" class="ghost" id="btnKeyDismiss">已保存，关闭</button></div></div>
           </div>
+      <div class="box" id="keyModelEditor" hidden>
+        <header><h3>模型权限 <span class="hint" id="keyModelEditorName"></span></h3><span class="grow"></span><button type="button" class="xs ghost" id="btnKeyModelCancel">取消</button></header>
+        <form class="pad" id="keyModelForm">
+          <label class="fld"><span class="lb">允许使用的模型</span><select id="keyEditModelPick" aria-label="添加允许的模型"><option value="">从模型目录添加…</option></select><textarea id="keyEditAllowedModels" rows="4" placeholder="留空允许全部模型，每行一个模型 ID" spellcheck="false"></textarea><span class="hint">按完整模型 ID 授权，cn: 与 global: 分开；留空允许全部模型。搜索工具独立可用。</span></label>
+          <button type="submit" class="primary" id="btnKeyModelSave">保存权限</button>
+        </form>
+      </div>
       <div class="box keys-table-box">
         <header><div><h3>所有密钥 <span class="heading-count" id="keysCount"></span></h3><p class="section-description">管理访问凭证，查看请求、成功率和 Token 消耗。</p></div><span class="grow"></span><div class="key-range" id="keyRange" role="group" aria-label="用量统计区间"><button type="button" data-key-hours="24">24h</button><button type="button" data-key-hours="168">7d</button><button type="button" data-key-hours="720">30d</button><button type="button" data-key-hours="0" class="on" aria-pressed="true">累计</button></div><button class="xs ghost" id="btnKeysReload">刷新</button></header>
         <div class="list-tools"><div class="search-field"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="keysSearch" type="search" placeholder="搜索名称或密钥前缀…" aria-label="搜索分发密钥"></div><select id="keysStatus" aria-label="密钥状态"><option value="">全部状态</option><option value="enabled">已启用</option><option value="disabled">已停用</option></select><span class="table-scope">共享账号池</span></div>

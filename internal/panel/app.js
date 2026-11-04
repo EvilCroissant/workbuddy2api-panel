@@ -38,6 +38,7 @@ let keyUsageState = {
 };
 let keyViewEpoch = 0, keyListSeq = 0, keyDetailSeq = 0, keyRefreshTimer = null;
 let keyListLoading = false;
+let keyModelEditingId = '', keyModelCatalog = null, keySecretSeq = 0;
 
 const $ = id => document.getElementById(id);
 
@@ -381,6 +382,8 @@ function go(v) {
     invalidateKeyView();
     dismissCreatedKey();
     $('keyComposer').hidden = true;
+    $('keyModelEditor').hidden = true;
+    keyModelEditingId = '';
   }
   $('btnAdd').hidden = v === 'keys';
   $('btnRefresh').hidden = v === 'keys';
@@ -1351,9 +1354,53 @@ const KEY_USAGE_RANGES = [
 const KEY_REFRESH_MS = 15000;
 
 function dismissCreatedKey() {
+  keySecretSeq++;
   $('keySecret').value = '';
   $('keyCreated').hidden = true;
 }
+
+function keyModelInput(id) {
+  return Array.from(new Set($(id).value.split(/[\s,，]+/).map(s => s.trim()).filter(Boolean)));
+}
+
+async function loadKeyModelCatalog() {
+  try {
+    if (!keyModelCatalog) keyModelCatalog = api('models').then(d => d.models || []).catch(e => { keyModelCatalog = null; throw e; });
+    const models = await keyModelCatalog;
+    const options = '<option value="">从模型目录添加…</option>' + models.map(m =>
+      '<option value="' + esc(m.id) + '">' + esc(m.id + (m.name ? ' · ' + m.name : '')) + '</option>').join('');
+    $('keyModelPick').innerHTML = options;
+    $('keyEditModelPick').innerHTML = options;
+  } catch (e) {
+    for (const id of ['keyModelPick', 'keyEditModelPick']) $(id).innerHTML = '<option value="">目录读取失败，可手动填写模型 ID</option>';
+  }
+}
+
+for (const [picker, input] of [['keyModelPick', 'keyAllowedModels'], ['keyEditModelPick', 'keyEditAllowedModels']]) {
+  $(picker).onchange = () => {
+    const model = $(picker).value;
+    if (!model) return;
+    $(input).value = Array.from(new Set([...keyModelInput(input), model])).join('\n');
+    $(picker).value = '';
+  };
+}
+
+$('btnKeyModelCancel').onclick = () => { $('keyModelEditor').hidden = true; keyModelEditingId = ''; };
+$('keyModelForm').onsubmit = async ev => {
+  ev.preventDefault();
+  const id = keyModelEditingId, epoch = keyViewEpoch;
+  if (!id) return;
+  const button = $('btnKeyModelSave');
+  button.disabled = true;
+  try {
+    await api('keys/' + encodeURIComponent(id), { method: 'PATCH', body: JSON.stringify({ allowed_models: keyModelInput('keyEditAllowedModels') }) });
+    if (view !== 'keys' || epoch !== keyViewEpoch) return;
+    if (keyModelEditingId === id) { $('keyModelEditor').hidden = true; keyModelEditingId = ''; }
+    toast('模型权限已保存', 'ok');
+    await loadKeys();
+  } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  finally { button.disabled = false; }
+};
 
 function stopKeyRefresh() {
   if (keyRefreshTimer != null) clearInterval(keyRefreshTimer);
@@ -1656,7 +1703,8 @@ function renderKeys() {
       esc(Array.from(k.name)[0] || 'K') + '</span><div><div class="key-name">' +
       esc(k.name) + '</div><div class="key-subtitle"><code>' + esc(k.prefix) +
       '…</code><span>创建于 ' + esc(fmtLocalDateTime(parseAPITime(k.created_at))) +
-      '</span></div></div></div></td>' +
+      '</span></div><div class="key-model-policy" title="' + esc((k.allowed_models || []).join('、')) + '">' +
+      ((k.allowed_models || []).length ? '允许 ' + k.allowed_models.length + ' 个模型' : '全部模型') + '</div></div></div></td>' +
       '<td class="key-status-cell"><span class="key-status ' + (k.enabled ? 'is-enabled' : '') +
       '"><i></i>' + (k.enabled ? '已启用' : '已停用') + '</span></td>' +
       '<td class="num key-metric-cell" data-l="请求">' +
@@ -1669,6 +1717,9 @@ function renderKeys() {
       '<td class="key-last-cell" data-l="最近调用" title="' + esc(lastTitle) + '">' +
       esc(metricText(keyLastText(stats))) + '</td>' +
       '<td class="acts">' +
+      '<button class="xs ghost" data-key-id="' + esc(k.id) + '" data-key-action="' +
+      (k.secret_available ? 'reveal' : 'rotate') + '">' + (k.secret_available ? '查看' : '重新生成') + '</button>' +
+      '<button class="xs ghost" data-key-id="' + esc(k.id) + '" data-key-action="models">模型权限</button>' +
       '<button class="xs ghost key-usage-toggle' + (expanded ? ' on' : '') +
       '" data-key-id="' + esc(k.id) + '" data-key-action="usage" aria-expanded="' +
       String(expanded) + '"' + (known ? '' : ' disabled title="用量监控不可用"') + '>用量</button>' +
@@ -1813,11 +1864,15 @@ $('keyCreateForm').onsubmit = async ev => {
   if (!name) { $('keyName').focus(); return; }
   $('btnKeyCreate').disabled = true;
   try {
-    const d = await api('keys', { method: 'POST', body: JSON.stringify({ name }) });
+    const epoch = keyViewEpoch, secretSeq = ++keySecretSeq;
+    const d = await api('keys', { method: 'POST', body: JSON.stringify({ name, allowed_models: keyModelInput('keyAllowedModels') }) });
+    if (view !== 'keys' || epoch !== keyViewEpoch || secretSeq !== keySecretSeq) return;
+    $('keySecretTitle').textContent = '密钥已创建 · ' + name;
     $('keySecret').value = d.secret;
     $('keyCreated').hidden = false;
     $('keyComposer').hidden = true;
     $('keyName').value = '';
+    $('keyAllowedModels').value = '';
     keyListState.page = 1;
     await loadKeys();
   } catch (e) { toast('生成失败：' + e.message, 'err'); await loadKeys(); }
@@ -1832,9 +1887,30 @@ $('keysBody').onclick = async ev => {
     await toggleKeyUsage(id);
     return;
   }
+  if (action === 'models') {
+    keyModelEditingId = id;
+    $('keyModelEditorName').textContent = key.name;
+    $('keyEditAllowedModels').value = (key.allowed_models || []).join('\n');
+    $('keyModelEditor').hidden = false;
+    $('keyEditAllowedModels').focus();
+    loadKeyModelCatalog();
+    return;
+  }
+  if (action === 'rotate' && !confirm('旧版 Key 仅保存摘要。重新生成「' + key.name + '」后旧 Key 立即失效，需更新客户端；模型权限和用量记录保留。继续？')) return;
   if (action === 'delete' && !confirm('删除「' + key.name + '」的 Key？删除后使用人需更换 Key。')) return;
   btn.disabled = true;
   try {
+    if (action === 'reveal' || action === 'rotate') {
+      const epoch = keyViewEpoch, secretSeq = ++keySecretSeq;
+      const d = await api('keys/' + encodeURIComponent(id) + (action === 'reveal' ? '/secret' : '/rotate'),
+        action === 'rotate' ? { method: 'POST' } : {});
+      if (view !== 'keys' || epoch !== keyViewEpoch || secretSeq !== keySecretSeq) return;
+      $('keySecretTitle').textContent = (action === 'rotate' ? '密钥已重新生成 · ' : '查看密钥 · ') + key.name;
+      $('keySecret').value = d.secret;
+      $('keyCreated').hidden = false;
+      if (action === 'rotate') await loadKeys();
+      return;
+    }
     await api('keys/' + encodeURIComponent(id), action === 'delete' ? { method: 'DELETE' }
       : { method: 'PATCH', body: JSON.stringify({ enabled: action === 'enable' }) });
     toast(action === 'delete' ? 'Key 已删除' : action === 'enable' ? 'Key 已启用' : 'Key 已停用', 'ok');
@@ -1842,6 +1918,10 @@ $('keysBody').onclick = async ev => {
       keyUsageState.expandedId = '';
       keyUsageState.detail = null;
       keyDetailSeq++;
+    }
+    if (action === 'delete') {
+      dismissCreatedKey();
+      if (keyModelEditingId === id) { keyModelEditingId = ''; $('keyModelEditor').hidden = true; }
     }
     await loadKeys();
   } catch (e) { toast('操作失败：' + e.message, 'err'); }
@@ -1857,8 +1937,9 @@ $('btnKeyOpen').onclick = () => {
   if (!$('keyCreated').hidden) { $('keySecret').focus(); toast('请先保存当前新 Key 并关闭提示', 'err'); return; }
   $('keyComposer').hidden = false;
   $('keyName').focus();
+  loadKeyModelCatalog();
 };
-$('btnKeyCancel').onclick = () => { $('keyComposer').hidden = true; $('keyName').value = ''; };
+$('btnKeyCancel').onclick = () => { $('keyComposer').hidden = true; $('keyName').value = ''; $('keyAllowedModels').value = ''; };
 $('btnKeyDismiss').onclick = dismissCreatedKey;
 $('btnKeyCopy').onclick = () => navigator.clipboard.writeText($('keySecret').value)
   .then(() => toast('Key 已复制', 'ok'), () => { $('keySecret').focus(); $('keySecret').select(); toast('请手动复制已选中的 Key', 'err'); });

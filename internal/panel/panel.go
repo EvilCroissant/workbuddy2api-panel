@@ -200,6 +200,8 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/config", p.withAuth(p.saveConfig))
 	p.mux.HandleFunc("GET /panel/api/keys", p.withAuth(p.listKeys))
 	p.mux.HandleFunc("GET /panel/api/keys/{id}/usage", p.withAuth(p.keyUsage))
+	p.mux.HandleFunc("GET /panel/api/keys/{id}/secret", p.withAuth(p.revealKey))
+	p.mux.HandleFunc("POST /panel/api/keys/{id}/rotate", p.withAuth(p.rotateKey))
 	p.mux.HandleFunc("POST /panel/api/keys", p.withAuth(p.createKey))
 	p.mux.HandleFunc("PATCH /panel/api/keys/{id}", p.withAuth(p.updateKey))
 	p.mux.HandleFunc("DELETE /panel/api/keys/{id}", p.withAuth(p.deleteKey))

@@ -14,31 +14,38 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 var ErrKeyNotFound = errors.New("key not found")
 var ErrKeyName = errors.New("名称需为 1–80 个字符")
+var ErrKeyModels = errors.New("最多允许 128 个模型，每个模型 ID 需为 1–200 个非空白字符")
+var ErrKeySecretUnavailable = errors.New("旧密钥仅保存摘要，请重新生成后查看")
 
-// KeyInfo is public metadata. A distributed key's plaintext is returned only at creation.
+// KeyInfo contains metadata only; secrets require a separate administrator request.
 type KeyInfo struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Prefix    string    `json:"prefix"`
-	Enabled   bool      `json:"enabled"`
-	CreatedAt time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	Prefix          string    `json:"prefix"`
+	Enabled         bool      `json:"enabled"`
+	CreatedAt       time.Time `json:"created_at"`
+	AllowedModels   []string  `json:"allowed_models,omitempty"`
+	SecretAvailable bool      `json:"secret_available"`
 }
 
 type storedKey struct {
 	KeyInfo
-	Hash string `json:"hash"`
+	Hash            string `json:"hash"`
+	EncryptedSecret string `json:"encrypted_secret,omitempty"`
 }
 
-// KeyStore persists SHA-256 digests beside the account state file. Mutations become
+// KeyStore persists digests and encrypted secrets beside the account state file. Mutations become
 // visible only after a successful atomic write, so failed revocations are reported.
 type KeyStore struct {
-	mu   sync.RWMutex
-	path string
-	keys []storedKey
+	mu        sync.RWMutex
+	path      string
+	keys      []storedKey
+	secretKey []byte
 }
 
 func OpenKeys(path string) (*KeyStore, error) {
@@ -64,6 +71,20 @@ func OpenKeys(path string) (*KeyStore, error) {
 		}
 		seen[k.ID] = true
 	}
+	for i := range s.keys {
+		k := &s.keys[i]
+		models, err := normalizeKeyModels(k.AllowedModels)
+		if err != nil {
+			return nil, err
+		}
+		k.AllowedModels = models
+		k.SecretAvailable = k.EncryptedSecret != ""
+		if k.SecretAvailable {
+			if _, err := s.decryptSecret(*k); err != nil {
+				return nil, fmt.Errorf("decode distributed key secret: %w", err)
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -75,7 +96,9 @@ func (s *KeyStore) List() []KeyInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, k := range s.keys {
-		out = append(out, k.KeyInfo)
+		info := k.KeyInfo
+		info.AllowedModels = append([]string(nil), info.AllowedModels...)
+		out = append(out, info)
 	}
 	return out
 }
@@ -90,9 +113,17 @@ func (s *KeyStore) HasKeys() bool {
 }
 
 func (s *KeyStore) Create(name string) (KeyInfo, string, error) {
+	return s.CreateWithModels(name, nil)
+}
+
+func (s *KeyStore) CreateWithModels(name string, models []string) (KeyInfo, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 80 {
 		return KeyInfo{}, "", ErrKeyName
+	}
+	models, err := normalizeKeyModels(models)
+	if err != nil {
+		return KeyInfo{}, "", err
 	}
 	var random [44]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -101,27 +132,104 @@ func (s *KeyStore) Create(name string) (KeyInfo, string, error) {
 	secret := "sk-wb-" + hex.EncodeToString(random[:32])
 	hash := sha256.Sum256([]byte(secret))
 	info := KeyInfo{ID: hex.EncodeToString(random[32:]), Name: name,
-		Prefix: secret[:14], Enabled: true, CreatedAt: time.Now().UTC()}
+		Prefix: secret[:14], Enabled: true, CreatedAt: time.Now().UTC(), AllowedModels: models, SecretAvailable: true}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	keys := append(append([]storedKey{}, s.keys...), storedKey{KeyInfo: info, Hash: hex.EncodeToString(hash[:])})
+	encrypted, err := s.encryptSecret(info.ID, secret)
+	if err != nil {
+		return KeyInfo{}, "", err
+	}
+	keys := append(append([]storedKey{}, s.keys...), storedKey{KeyInfo: info, Hash: hex.EncodeToString(hash[:]), EncryptedSecret: encrypted})
 	if err := s.save(keys); err != nil {
 		return KeyInfo{}, "", err
 	}
+	info.AllowedModels = append([]string(nil), info.AllowedModels...)
 	return info, secret, nil
 }
 
 func (s *KeyStore) SetEnabled(id string, enabled bool) error {
+	return s.Update(id, &enabled, nil)
+}
+
+func (s *KeyStore) Update(id string, enabled *bool, models *[]string) error {
+	var normalized []string
+	if models != nil {
+		var err error
+		normalized, err = normalizeKeyModels(*models)
+		if err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	keys := append([]storedKey{}, s.keys...)
 	for i := range keys {
 		if keys[i].ID == id {
-			keys[i].Enabled = enabled
+			if enabled != nil {
+				keys[i].Enabled = *enabled
+			}
+			if models != nil {
+				keys[i].AllowedModels = normalized
+			}
 			return s.save(keys)
 		}
 	}
 	return ErrKeyNotFound
+}
+
+func normalizeKeyModels(models []string) ([]string, error) {
+	if len(models) > 128 {
+		return nil, ErrKeyModels
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" || strings.IndexFunc(model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) >= 0 {
+			return nil, ErrKeyModels
+		}
+		if !strings.HasPrefix(model, "cn:") && !strings.HasPrefix(model, "global:") {
+			model = "cn:" + model
+		}
+		if len(model) > 200 || model == "cn:" || model == "global:" {
+			return nil, ErrKeyModels
+		}
+		if !seen[model] {
+			out = append(out, model)
+			seen[model] = true
+		}
+	}
+	return out, nil
+}
+
+// AllowsModel receives the resolved realm and model ID, so aliases cannot bypass it.
+func (s *KeyStore) AllowsModel(id, realm, model string) bool {
+	if id == "" {
+		return true
+	} // administrator or legacy anonymous access
+	if s == nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, k := range s.keys {
+		if k.ID != id {
+			continue
+		}
+		if !k.Enabled {
+			return false
+		}
+		if len(k.AllowedModels) == 0 {
+			return true
+		}
+		for _, allowed := range k.AllowedModels {
+			if allowed == realm+":"+model {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func (s *KeyStore) Delete(id string) error {

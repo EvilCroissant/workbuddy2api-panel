@@ -149,6 +149,17 @@ func TestDistributedKeyFailuresAndConcurrency(t *testing.T) {
 	if _, _, err := s.Create("failed"); err == nil || len(s.List()) != 12 {
 		t.Fatal("failed creation changed live state")
 	}
+	models := []string{"cn:restricted"}
+	if err := s.Update(info.ID, nil, &models); err == nil || !s.AllowsModel(info.ID, "cn", "other") {
+		t.Fatal("failed permissions write changed live state")
+	}
+	oldSecret, err := s.Reveal(info.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Rotate(info.ID); err == nil || !VerifyAPI(req("Bearer "+oldSecret), "admin", s) {
+		t.Fatal("failed rotation revoked live token")
+	}
 }
 
 func TestDistributedKeysCorruptFileFailsClosed(t *testing.T) {

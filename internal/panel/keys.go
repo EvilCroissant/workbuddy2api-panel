@@ -68,7 +68,7 @@ func (p *Panel) keyUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeKeyRequest(w http.ResponseWriter, r *http.Request, v any) bool {
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768))
 	d.DisallowUnknownFields()
 	if err := d.Decode(v); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid key request")
@@ -94,15 +94,16 @@ func (p *Panel) createKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Name string `json:"name"`
+		Name          string   `json:"name"`
+		AllowedModels []string `json:"allowed_models"`
 	}
 	if !decodeKeyRequest(w, r, &in) {
 		return
 	}
-	info, secret, err := p.cfg.Keys.Create(in.Name)
+	info, secret, err := p.cfg.Keys.CreateWithModels(in.Name, in.AllowedModels)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, httpauth.ErrKeyName) {
+		if errors.Is(err, httpauth.ErrKeyName) || errors.Is(err, httpauth.ErrKeyModels) {
 			status = http.StatusBadRequest
 		}
 		writeErr(w, status, err.Error())
@@ -114,20 +115,49 @@ func (p *Panel) createKey(w http.ResponseWriter, r *http.Request) {
 
 func (p *Panel) updateKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Enabled *bool `json:"enabled"`
+		Enabled       *bool     `json:"enabled"`
+		AllowedModels *[]string `json:"allowed_models"`
 	}
 	if !decodeKeyRequest(w, r, &in) {
 		return
 	}
-	if in.Enabled == nil {
-		writeErr(w, http.StatusBadRequest, "enabled is required")
+	if in.Enabled == nil && in.AllowedModels == nil {
+		writeErr(w, http.StatusBadRequest, "enabled or allowed_models is required")
 		return
 	}
 	if p.cfg.Keys == nil {
 		writeErr(w, http.StatusNotImplemented, "key store not available")
 		return
 	}
-	p.keyResult(w, p.cfg.Keys.SetEnabled(r.PathValue("id"), *in.Enabled))
+	p.keyResult(w, p.cfg.Keys.Update(r.PathValue("id"), in.Enabled, in.AllowedModels))
+}
+
+func (p *Panel) revealKey(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Keys == nil {
+		writeErr(w, http.StatusNotImplemented, "key store not available")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	secret, err := p.cfg.Keys.Reveal(r.PathValue("id"))
+	if err != nil {
+		p.keyResult(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"secret": secret})
+}
+
+func (p *Panel) rotateKey(w http.ResponseWriter, r *http.Request) {
+	if p.cfg.Keys == nil {
+		writeErr(w, http.StatusNotImplemented, "key store not available")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	secret, err := p.cfg.Keys.Rotate(r.PathValue("id"))
+	if err != nil {
+		p.keyResult(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"secret": secret})
 }
 
 func (p *Panel) deleteKey(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +171,10 @@ func (p *Panel) deleteKey(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) keyResult(w http.ResponseWriter, err error) {
 	if errors.Is(err, httpauth.ErrKeyNotFound) {
 		writeErr(w, http.StatusNotFound, "key not found")
+	} else if errors.Is(err, httpauth.ErrKeyModels) {
+		writeErr(w, http.StatusBadRequest, err.Error())
+	} else if errors.Is(err, httpauth.ErrKeySecretUnavailable) {
+		writeErr(w, http.StatusConflict, err.Error())
 	} else if err != nil {
 		writeErr(w, http.StatusInternalServerError, "save key: "+err.Error())
 	} else {
