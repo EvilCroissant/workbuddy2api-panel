@@ -192,6 +192,22 @@ func (a *Auth) BackfillRealm() (bool, string) {
 	return true, r
 }
 
+// BackfillRealmFromIssuer 用 access token 的已知 issuer 校正持久化 realm。
+// 未知 issuer 不覆盖已有值，也不替代旧凭证的 domain 回填逻辑。
+func (a *Auth) BackfillRealmFromIssuer() (changed bool, realm string, known bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := RealmFromIssuer(a.AccessToken)
+	if !ok {
+		return false, a.realm, false
+	}
+	if a.realm == r {
+		return false, r, true
+	}
+	a.realm = r
+	return true, r, true
+}
+
 // RealmStored 直读持久化的 realm 标识（可能为空 = 未 backfill 的旧文件，Realm() 会 fallback）。
 func (a *Auth) RealmStored() string {
 	a.mu.Lock()
@@ -462,7 +478,15 @@ func LoadDir(dir string) ([]*Auth, error) {
 				logfmt.Label(a.UID, a.Nickname), prev, f)
 		}
 		seenUID[a.UID] = f
-		if a.RealmStored() == "" {
+		if changed, r, known := a.BackfillRealmFromIssuer(); known {
+			if changed {
+				if err := a.SaveAtomic(); err != nil {
+					log.Printf("WARN: auth %s issuer realm save: %v", logfmt.Label(a.UID, a.Nickname), err)
+				} else {
+					log.Printf("auth %s realm corrected from JWT issuer: %s", logfmt.Label(a.UID, a.Nickname), r)
+				}
+			}
+		} else if a.RealmStored() == "" {
 			if changed, r := a.BackfillRealm(); changed {
 				if err := a.SaveAtomic(); err != nil {
 					log.Printf("WARN: auth %s realm backfill save: %v", logfmt.Label(a.UID, a.Nickname), err)

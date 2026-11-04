@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -156,15 +157,28 @@ func TestLoadDirBackfillsRealm(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	issuerFixture, err := json.Marshal(map[string]any{
+		"auth": map[string]any{
+			"accessToken":  tokenWithIssuer(t, "https://www.workbuddy.ai/auth/realms/copilot"),
+			"refreshToken": "r", "expiresAt": 1, "domain": "www.workbuddy.cn", "realm": "cn",
+		},
+		"account": map[string]any{"uid": "issuer-global"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "workbuddy-issuer-global.json"), issuerFixture, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	list, err := LoadDir(dir)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if len(list) != 3 {
-		t.Fatalf("want 3 accounts, got %d", len(list))
+	if len(list) != 4 {
+		t.Fatalf("want 4 accounts, got %d", len(list))
 	}
-	want := map[string]string{"g1": "global", "c1": "cn", "c2": "cn"}
+	want := map[string]string{"g1": "global", "c1": "cn", "c2": "cn", "issuer-global": "global"}
 	for _, a := range list {
 		// 内存态已补标识
 		if got := a.RealmStored(); got != want[a.UID] {
