@@ -115,6 +115,17 @@ func (s *Scheduler) compTargets() []compTarget {
 // /panel/api/packages 的账号遍历一致。
 func (s *Scheduler) CompensationStatusAll() []CompensationRow {
 	targets := s.compTargets()
+	return s.compensationStatusTargets(targets)
+}
+
+// CompensationStatusPage 只查询指定账号区间的补偿状态，并返回全池账号数。
+func (s *Scheduler) CompensationStatusPage(offset, limit int) ([]CompensationRow, int) {
+	targets := s.compTargets()
+	page, total := compensationTargetPage(targets, offset, limit)
+	return s.compensationStatusTargets(page), total
+}
+
+func (s *Scheduler) compensationStatusTargets(targets []compTarget) []CompensationRow {
 	rows := make([]CompensationRow, len(targets))
 
 	sem := make(chan struct{}, 3)
@@ -151,6 +162,17 @@ func (s *Scheduler) CompensationStatusAll() []CompensationRow {
 // 业务错误），串行让「前一个号失败」不影响后一个号的判定，且账号量是个位数。
 func (s *Scheduler) ClaimCompensationNow() []CompensationResult {
 	targets := s.compTargets()
+	return s.claimCompensationTargets(targets)
+}
+
+// ClaimCompensationPage 只处理指定账号区间，并返回全池账号数。
+func (s *Scheduler) ClaimCompensationPage(offset, limit int) ([]CompensationResult, int) {
+	targets := s.compTargets()
+	page, total := compensationTargetPage(targets, offset, limit)
+	return s.claimCompensationTargets(page), total
+}
+
+func (s *Scheduler) claimCompensationTargets(targets []compTarget) []CompensationResult {
 	out := make([]CompensationResult, 0, len(targets))
 	for _, t := range targets {
 		if t.a == nil {
@@ -160,6 +182,20 @@ func (s *Scheduler) ClaimCompensationNow() []CompensationResult {
 		out = append(out, s.claimOne(t.a))
 	}
 	return out
+}
+
+func compensationTargetPage(targets []compTarget, offset, limit int) ([]compTarget, int) {
+	total := len(targets)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 || limit > total-offset {
+		limit = total - offset
+	}
+	return targets[offset : offset+limit], total
 }
 
 // ClaimCompensationFor 单号领取补偿（面板单号按钮）；账号不在池中返回 error。

@@ -636,12 +636,10 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 <div class="shell">
   <nav class="nav" id="navDrawer">
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 7 3 10 4-8 4 8 3-10"/></svg></div>
       <div class="name">WorkBuddy2API</div>
       <div class="sub" id="navSub">控制台</div>
     </div>
     <ul>
-      <li class="nav-label">工作空间</li>
       <li><a href="#accounts" data-view="accounts" class="on">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="5.5" r="2.6"/><path d="M2.8 13.5c.6-2.6 2.7-4 5.2-4s4.6 1.4 5.2 4"/></svg>
         账号池</a></li>
@@ -657,7 +655,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#models" data-view="models">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M8 1.8 14 5v6L8 14.2 2 11V5z"/><path d="M2 5l6 3.2L14 5M8 8.2v6"/></svg>
         模型与档位</a></li>
-      <li class="nav-label">服务管理</li>
       <li><a href="#keys" data-view="keys">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="6" r="3"/><path d="m7.2 8.2 5.3 5.3M10 11l2-2M12 13l2-2"/></svg>
         API 密钥</a></li>
@@ -693,15 +690,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 账号池 -->
     <section class="view" id="view-accounts">
-      <div class="page-heading"><div><span class="eyebrow">WORKSPACE</span><h1>账号池</h1><p>管理接入账号，掌握可用状态与积分余额。</p></div><span class="page-badge"><i></i>自动刷新</span></div>
       <div class="stats">
-        <div class="stat"><div class="k">账号总数</div><div class="v" id="sTotal">-</div></div>
-        <div class="stat good"><div class="k">可用</div><div class="v" id="sHealthy">-</div></div>
-        <div class="stat warn"><div class="k">冷却中</div><div class="v" id="sCooling">-</div></div>
-        <div class="stat bad"><div class="k">已禁用</div><div class="v" id="sDisabled">-</div></div>
-        <div class="stat warn"><div class="k">已暂停选号</div><div class="v" id="sPaused">-</div></div>
-        <div class="stat"><div class="k">粘性会话</div><div class="v" id="sSticky">-</div></div>
-        <div class="stat stat-credits"><div class="k">积分剩余 / 总额</div><div class="v" id="sCredits">-</div></div>
+        <div class="stat"><div class="v" id="sTotal">-</div><div class="k">账号总数</div></div>
+        <div class="stat good"><div class="v" id="sHealthy">-</div><div class="k">可用</div></div>
+        <div class="stat warn"><div class="v" id="sCooling">-</div><div class="k">冷却中</div></div>
+        <div class="stat bad"><div class="v" id="sDisabled">-</div><div class="k">已禁用</div></div>
+        <div class="stat warn"><div class="v" id="sPaused">-</div><div class="k">已暂停选号</div></div>
+        <div class="stat"><div class="v" id="sCredits">-</div><div class="k">积分剩余 / 总额</div></div>
+        <div class="stat"><div class="v" id="sSticky">-</div><div class="k">粘性会话</div></div>
       </div>
 
       <!-- 卡片默认可见：此前 hidden + 「仅点检查才渲染」形成死锁（按钮藏在隐藏卡片里，
@@ -746,6 +742,12 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnCompClaimAll">全部领取</button>
         </header>
         <div class="pad"><div id="compList"></div></div>
+        <div class="list-pager" role="group" aria-label="官方补偿账号分页">
+          <span class="page-info" id="compPageInfo" aria-live="polite"></span>
+          <button class="xs" id="compPrev" disabled>上一页</button>
+          <span id="compPageNumber">1 / 1</span>
+          <button class="xs" id="compNext" disabled>下一页</button>
+        </div>
       </div>
 
       <div class="box">
@@ -803,7 +805,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 任务中心 -->
     <section class="view" id="view-taskscenter" hidden>
-      <div class="page-heading"><div><span class="eyebrow">AUTOMATION</span><h1>任务中心</h1><p>集中查看待办任务，跟踪每个账号的执行进度。</p></div></div>
       <div class="box">
         <header>
           <h3>成长任务队列 <span class="hint" id="qcSummary"></span></h3>
@@ -834,7 +835,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 模型与档位 -->
     <section class="view" id="view-models" hidden>
-      <div class="page-heading"><div><span class="eyebrow">MODEL CATALOG</span><h1>模型与档位</h1><p>查找可用模型，对比能力、上下文与积分倍率。</p></div></div>
       <div class="box">
         <header>
           <h3>模型能力 <span class="hint">max_tokens bug已修复目前可以正常透传最大输出,但是官方返回的最大输出仅为参考，不保证完全正确
@@ -894,12 +894,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 积分构成 -->
     <section class="view" id="view-packages" hidden>
-      <div class="page-heading"><div><span class="eyebrow">CREDITS</span><h1>积分构成</h1><p>查看积分来源、剩余额度与到期分布。</p></div></div>
       <div class="box">
         <header>
           <h3>积分到期分布</h3>
           <span class="grow"></span>
-          <span class="note">按批次到期日聚合，颜色区分账号</span>
+          <span class="note">按当前页账号的批次到期日聚合，颜色区分账号</span>
         </header>
         <div class="pad"><div id="pkExpiry"></div></div>
       </div>
@@ -916,13 +915,17 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnPk">刷新</button>
         </header>
         <div class="pad"><div class="pk-grid" id="pkSummary"></div></div>
+          <div class="list-pager" role="group" aria-label="积分构成分页">
+            <span class="page-info" id="pkPageInfo" aria-live="polite"></span>
+            <label>每页 <select class="xs" id="pkPageSize" aria-label="积分构成每页账号数"><option value="10" selected>10</option><option value="20">20</option><option value="50">50</option></select></label>
+            <button class="xs" id="pkPrev" disabled>上一页</button><span id="pkPageNumber">1 / 1</span><button class="xs" id="pkNext" disabled>下一页</button>
+          </div>
       </div>
       <div id="pkDetail"></div>
     </section>
 
     <!-- 用量 -->
     <section class="view" id="view-usage" hidden>
-      <div class="page-heading"><div><span class="eyebrow">ANALYTICS</span><h1>用量分析</h1><p>了解调用趋势，按账号和模型追踪资源消耗。</p></div></div>
       <div class="box">
         <header>
           <h3>用量总览</h3>
@@ -997,11 +1000,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 多 Key 分发 -->
     <section class="view" id="view-keys" hidden>
-      <div class="page-heading"><div><span class="eyebrow">ACCESS MANAGEMENT</span><h1>API 密钥</h1><p>为不同使用人分配独立密钥，随时管理访问权限。</p></div><button type="button" class="primary create-key-button" id="btnKeyOpen" disabled><span aria-hidden="true">＋</span> 创建密钥</button></div>
-      <div class="key-summary" aria-label="密钥概览">
-        <div class="key-metric"><span>全部密钥</span><strong id="keyTotal">—</strong><small>独立分发，统一管理</small></div>
-        <div class="key-metric"><span><i class="metric-dot enabled"></i>已启用</span><strong id="keyEnabled">—</strong><small>可调用当前账号池</small></div>
-        <div class="key-metric"><span><i class="metric-dot"></i>已停用</span><strong id="keyDisabled">—</strong><small>保留记录，可随时恢复</small></div>
+      <div class="box key-summary" aria-label="密钥概览">
+        <div class="stat"><div class="v" id="keyTotal">—</div><div class="k">全部密钥</div></div>
+        <div class="stat good"><div class="v" id="keyEnabled">—</div><div class="k">已启用</div></div>
+        <div class="stat"><div class="v" id="keyDisabled">—</div><div class="k">已停用</div></div>
+        <div class="key-create-action"><button type="button" class="primary" id="btnKeyOpen" disabled>创建密钥</button></div>
       </div>
       <div class="box key-composer" id="keyComposer" hidden>
         <header><div><h3>创建 API 密钥</h3><p class="section-description">为密钥添加一个便于识别的名称。</p></div><span class="grow"></span><button type="button" class="xs ghost" id="btnKeyCancel">取消</button></header>
@@ -1037,7 +1040,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 配置 -->
     <section class="view" id="view-config" hidden>
-      <div class="page-heading"><div><span class="eyebrow">PREFERENCES</span><h1>服务配置</h1><p>调整网关、账号调度与自动任务的运行方式。</p></div></div>
       <form id="cfgForm">
         <div class="box">
           <header><h3>服务</h3><span class="grow"></span><span class="note" id="cfgPath"></span></header>
@@ -1263,7 +1265,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
     <!-- 日志 -->
     <section class="view" id="view-logs" hidden>
-      <div class="page-heading"><div><span class="eyebrow">OBSERVABILITY</span><h1>运行日志</h1><p>定位调用问题，查看请求明细与系统事件。</p></div></div>
       <div class="box">
         <header>
           <h3>请求记录 <span class="hint">调用来源：IP 取 X-Forwarded-For 首段，无代理头时回落 TCP 对端</span></h3>

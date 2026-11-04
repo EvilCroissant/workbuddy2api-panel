@@ -364,11 +364,14 @@ $('btnKey').onclick = async () => {
 $('keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnKey').click(); });
 
 /* ── 路由 ─────────────────────────────────────────────────────────── */
-/* 积分包明细共享缓存：「积分构成」视图与首页「积分到期提醒」卡片共用同一份
-   /panel/api/packages 数据（逐账号实时查上游，能省一次是一次）。声明在路由区
-   是因为 go() 的初始调用就会触发首页卡片的渲染，必须先于它就位。 */
+/* 首页到期提醒的全量积分包缓存。积分构成视图使用独立分页请求，避免千级账号池
+   的全量查询阻塞浏览器。声明在路由区是因为 go() 初始调用会触发首页卡片渲染。 */
 let lastPackages = null;
 let lastPackagesAt = 0;
+let packagePage = 1, packagePageSize = 10, packagePageTotal = 0;
+let packagePageData = null, packagePageAt = 0;
+let packageDetailLimit = 5;
+let packageLoadSeq = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
@@ -488,7 +491,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + ' <span class="realm-tag">' + (s.realm === 'global' ? '国际版' : '国内版') + '</span>' + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -1988,6 +1991,7 @@ $('btnRefresh').onclick = async () => {
    TestAppJSTopLevelSmoke 正是为这类问题设的闸门。 */
 let compCache = null;
 let compInFlight = null;   // 在途请求的 promise（非布尔标志：布尔标志配 force 刷新会静默空转）
+let compPage = 1, compPageSize = 10, compPageTotal = 0;
 
 // compPending 挑出「可领未领」的账号。
 // 纯函数：判据独立于渲染，node 侧单测单独钉住。
@@ -2029,12 +2033,23 @@ function compDeadlineText(endTime, now) {
 
 function renderCompensation(d) {
   const rows = (d && d.accounts) || [];
+  const pageTotal = Number(d && d.total || rows.length);
+  const pageSize = typeof compPageSize === 'number' ? compPageSize : 10;
+  const page = typeof compPage === 'number' ? compPage : 1;
+  if (typeof compPageTotal !== 'undefined') compPageTotal = pageTotal;
+  const pageCount = Math.max(1, Math.ceil(pageTotal / pageSize));
+  if ($('compPageInfo')) $('compPageInfo').textContent = pageTotal
+    ? '显示 ' + (Number(d.offset || 0) + 1) + '–' + (Number(d.offset || 0) + rows.length) + ' / ' + pageTotal
+    : '没有账号';
+  if ($('compPageNumber')) $('compPageNumber').textContent = page + ' / ' + pageCount;
+  if ($('compPrev')) $('compPrev').disabled = page <= 1;
+  if ($('compNext')) $('compNext').disabled = page >= pageCount;
   const box = $('compBox');
   if (!box) return;
   const active = rows.filter(r => r && !r.error && r.status && r.status.active);
   const failed = compErrored(rows);
   // 「有失败就必须显形」——哪怕一条有效数据都没有。
-  if (!active.length && !failed.length) { box.hidden = true; return; }
+  if (!active.length && !failed.length && pageTotal <= rows.length) { box.hidden = true; return; }
   box.hidden = false;
 
   const now = Date.now();
@@ -2059,7 +2074,7 @@ function renderCompensation(d) {
     '<span class="tag mute">' + esc(String(r.error).slice(0, 120)) + '</span></div>'
   ).join('');
 
-  $('compList').innerHTML = okRows + errRows;
+  $('compList').innerHTML = okRows + errRows || '<div class="empty">本页没有待领补偿</div>';
 
   const n = compPending(rows).length;
   let note = n ? (n + ' 个账号待领 · 共 ' + fmtTok(compTotalPending(rows)) + ' 积分') : '当前无待领补偿';
@@ -2080,7 +2095,8 @@ async function loadCompensation() {
   if (compInFlight) { await compInFlight; return; }
   compInFlight = (async () => {
     try {
-      const d = await api('compensation');
+      const offset = (compPage - 1) * compPageSize;
+      const d = await api('compensation?offset=' + offset + '&limit=' + compPageSize);
       compCache = d;
       renderCompensation(d);
     } catch (e) {
@@ -2118,20 +2134,38 @@ if ($('compList')) $('compList').addEventListener('click', async e => {
 });
 
 if ($('btnCompRefresh')) $('btnCompRefresh').onclick = () => loadCompensation();
+if ($('compPrev')) $('compPrev').onclick = async () => {
+  if (compPage > 1) { compPage--; await loadCompensation(); }
+};
+if ($('compNext')) $('compNext').onclick = async () => {
+  if (compPage * compPageSize < compPageTotal) { compPage++; await loadCompensation(); }
+};
 
 if ($('btnCompClaimAll')) $('btnCompClaimAll').onclick = async () => {
   const b = $('btnCompClaimAll');
   b.disabled = true;
+  const originalText = b.textContent;
+  const batchSize = 5;
+  const totals = { total: 0, claimed: 0, skipped: 0, errored: 0, credit: 0 };
   try {
-    const r = await api('compensation_all', { method: 'POST' });
-    const s = r.summary || {};
+    const total = compPageTotal;
+    for (let offset = 0; offset < total; offset += batchSize) {
+      b.textContent = '领取中 ' + Math.min(offset + batchSize, total) + '/' + total;
+      const r = await api('compensation_all?offset=' + offset + '&limit=' + batchSize, { method: 'POST' });
+      const s = r.summary || {};
+      totals.total += Number(s.total || 0);
+      totals.claimed += Number(s.claimed || 0);
+      totals.skipped += Number(s.skipped || 0);
+      totals.errored += Number(s.errored || 0);
+      totals.credit += Number(s.credit || 0);
+    }
     // 顺序要紧：先看有没有账号没拿到结论，再看有没有领到。
     // 只按 claimed 判定的话，「全部查询失败」会被说成「当前没有待领补偿」，
     // 把故障说成了「没活动」——比不说更糟。
-    if (s.errored) {
-      toast(s.errored + ' 个账号查询失败，未能确认是否有补偿', 'err');
-    } else if (s.claimed) {
-      toast('已领取 ' + s.claimed + ' 个账号，共 ' + fmtTok(s.credit || 0) + ' 积分', 'ok');
+    if (totals.errored) {
+      toast(totals.errored + ' 个账号查询失败，未能确认是否有补偿', 'err');
+    } else if (totals.claimed) {
+      toast('已领取 ' + totals.claimed + ' 个账号，共 ' + fmtTok(totals.credit) + ' 积分', 'ok');
     } else {
       toast('当前没有待领补偿', '');
     }
@@ -2141,6 +2175,7 @@ if ($('btnCompClaimAll')) $('btnCompClaimAll').onclick = async () => {
     toast('领取失败：' + e.message, 'err');
   } finally {
     b.disabled = false;
+    b.textContent = originalText;
   }
 };
 
@@ -3496,6 +3531,16 @@ function renderExpiryDistribution(list, now) {
 function renderPackages(d, detailLimit) {
   const list = (d.accounts || []);
   const now = Date.now();
+  const total = Number(d.total || list.length);
+  const pageCount = Math.max(1, Math.ceil(total / packagePageSize));
+  $('pkNote').textContent = total + ' 个账号 · 第 ' + packagePage + ' / ' + pageCount + ' 页 · 当前页实时查询';
+  if ($('pkPageInfo')) $('pkPageInfo').textContent = total
+    ? '显示 ' + (Number(d.offset || 0) + 1) + '–' + (Number(d.offset || 0) + list.length) + ' / ' + total
+    : '没有账号';
+  if ($('pkPageNumber')) $('pkPageNumber').textContent = packagePage + ' / ' + pageCount;
+  if ($('pkPrev')) $('pkPrev').disabled = packagePage <= 1;
+  if ($('pkNext')) $('pkNext').disabled = packagePage >= pageCount;
+  if ($('pkPageSize')) $('pkPageSize').value = String(packagePageSize);
   const expiryColors = pkAccountColorMap(list);
   renderExpiryDistribution(list, now);
   if (!list.length) {
@@ -3563,8 +3608,6 @@ function renderPackages(d, detailLimit) {
       '<div class="pk-legend">' + legend + '</div>' +
       '</div>';
   }).join('');
-
-  $('pkNote').textContent = list.length + ' 个账号 · 实时查询上游';
 
   // 逐包明细：每个账号一个表，排序规则由视图顶部的选择器决定（默认到期近的在前）
   $('pkDetail').innerHTML = list.map(a => {
@@ -3668,43 +3711,61 @@ if ($('pkSort')) {
   $('pkSort').onchange = () => {
     pkSortMode = $('pkSort').value;
     localStorage.setItem(LS_PK_SORT, pkSortMode);
-    if (lastPackages) renderPackages(lastPackages, lastDetailLimit);   // 数据在内存，直接重排
+    if (packagePageData) renderPackages(packagePageData, packageDetailLimit);
   };
 }
 
-// loadPackages 按需拉取：有缓存（上次任意入口拉到的 packages 数据）先直接渲染，
-// 不再「切进积分构成页就打一次上游」——逐账号实时查询在账号多时既慢又压上游。
-// 无缓存（首次进入）才自动查一次；显式刷新（force=true，点「刷新」按钮）始终实时查。
+// 积分构成只查当前页，避免千级账号池把单个 HTTP 请求拖到浏览器超时。
 async function loadPackages(force) {
-  if (!force && lastPackages) {
-    renderPackages(lastPackages, lastDetailLimit);
-    const ageMin = Math.floor((Date.now() - lastPackagesAt) / 60000);
-    if (ageMin > 0) $('pkNote').textContent = lastPackages.accounts.length + ' 个账号 · ' + ageMin + ' 分钟前的数据，点「刷新」更新';
+  const requestSeq = ++packageLoadSeq;
+  const offset = (packagePage - 1) * packagePageSize;
+  if (!force && packagePageData && packagePageData.offset === offset && packagePageData.limit === packagePageSize) {
+    renderPackages(packagePageData, packageDetailLimit);
+    const ageMin = Math.floor((Date.now() - packagePageAt) / 60000);
+    if (ageMin > 0) $('pkNote').textContent += ' · ' + ageMin + ' 分钟前';
     return;
   }
-  $('pkSummary').innerHTML = '<div class="empty">查询中…（逐账号向上游实时查询）</div>';
+  $('pkSummary').innerHTML = '<div class="empty">查询中…（当前页最多 ' + packagePageSize + ' 个账号）</div>';
   $('pkDetail').innerHTML = '';
   $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">查询中…</div>';
+  if ($('pkPageInfo')) $('pkPageInfo').textContent = '正在查询当前页…';
   try {
     const [d, c] = await Promise.all([
-      api('packages'),
+      api('packages?offset=' + offset + '&limit=' + packagePageSize),
       api('config').catch(() => null),
     ]);
-    lastPackages = d;                            // 缓存供首页到期卡片与排序切换复用
-    lastPackagesAt = Date.now();
-    lastDetailLimit = pkDetailLimit(c && c.config);
-    renderPackages(d, lastDetailLimit);
+    if (requestSeq !== packageLoadSeq) return;
+    packagePageData = d;
+    packagePageAt = Date.now();
+    packagePageTotal = Number(d.total || 0);
+    packageDetailLimit = pkDetailLimit(c && c.config);
+    renderPackages(d, packageDetailLimit);
   } catch (e) {
+    if (requestSeq !== packageLoadSeq) return;
     $('pkSummary').innerHTML = '<div class="empty">读取失败：' + esc(e.message) + '</div>';
     $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败：' + esc(e.message) + '</div>';
+    if ($('pkPageInfo')) $('pkPageInfo').textContent = '当前页读取失败，可重试';
   }
 }
+
+if ($('pkPageSize')) $('pkPageSize').onchange = () => {
+  packagePageSize = Math.max(1, Math.min(50, Number($('pkPageSize').value) || 10));
+  packagePage = 1;
+  packagePageData = null;
+  loadPackages(true);
+};
+if ($('pkPrev')) $('pkPrev').onclick = () => {
+  if (packagePage > 1) { packagePage--; loadPackages(false); }
+};
+if ($('pkNext')) $('pkNext').onclick = () => {
+  if (packagePage * packagePageSize < packagePageTotal) { packagePage++; loadPackages(false); }
+};
 
 /* ── 积分到期提醒（首页卡片）────────────────────────────────────────── */
 /* 积分不是永久的：签到/任务发的裂变包约一个月失效。只看「剩余积分 ÷ 日消耗」
    会系统性偏乐观——用不完的部分到期直接蒸发。这里把「最近要过期的是哪批、
    有多少、到期前每天要至少消耗多少」顶到首页，数据源与「积分构成」共用
-   （lastPackages 缓存，EXP_FRESH_MS 内复用，不重复打上游）。 */
+   首页 lastPackages 缓存，EXP_FRESH_MS 内复用，不重复打上游。 */
 
 // expBatches 把某账号的包聚合成「到期日 → 该日作废积分」升序列表。
 // 只统计 remain>0 且有到期时间的包——没余额/长期包到期没有任何影响。
@@ -3966,7 +4027,7 @@ async function loadExpiry(force) {
   $('expNote').textContent = '查询中…';
   try {
     const d = await api('packages');
-    lastPackages = d;                            // 与「积分构成」视图共用同一份缓存
+    lastPackages = d;
     lastPackagesAt = Date.now();
     renderExpiry(d);
   } catch (e) {

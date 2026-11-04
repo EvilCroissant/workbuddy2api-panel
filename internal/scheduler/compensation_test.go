@@ -106,6 +106,27 @@ func TestCompensationStatusAllKeepsPoolOrder(t *testing.T) {
 	}
 }
 
+func TestCompensationStatusPageLimitsUpstreamQueries(t *testing.T) {
+	rec := &compensationRecorder{}
+	s := compensationScheduler(t, rec,
+		&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "u2", AccessToken: "at2", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "u3", AccessToken: "at3", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "u4", AccessToken: "at4", ExpiresAt: 9999999999},
+	)
+
+	rows, total := s.CompensationStatusPage(1, 2)
+	if total != 4 || len(rows) != 2 {
+		t.Fatalf("page returned len=%d total=%d, want len=2 total=4", len(rows), total)
+	}
+	if rows[0].UID != "u2" || rows[1].UID != "u3" {
+		t.Fatalf("page UIDs=%q,%q want u2,u3", rows[0].UID, rows[1].UID)
+	}
+	if got := len(rec.pathsSnapshot()); got != 2 {
+		t.Fatalf("upstream status calls=%d want 2", got)
+	}
+}
+
 // TestCompensationSkippedRowsCarryNickname 跳过行必须带昵称（S9 相关）。
 //
 // 跳过行不参与上游查询，若不返回昵称，面板只能显示截断的 UID，用户根本认不出

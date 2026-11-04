@@ -784,18 +784,21 @@ func (p *Panel) balanceAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "accounts": p.cfg.Pool.List()})
 }
 
-// compensation 查询全部账号的补偿活动状态（**只读**，不发起任何领取）。
-//
-// 与 balanceAll 同构：同步等待而非「触发后盲刷」——账号量小（个位数），
-// 面板拿到响应即可直接渲染横幅，不用再轮询。
+// compensation 分页查询补偿活动状态（**只读**，不发起任何领取）。
 func (p *Panel) compensation(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
+	total := len(p.cfg.Pool.List())
+	offset, limit := compensationPage(r, total, 10)
+	accounts, total := p.cfg.Scheduler.CompensationStatusPage(offset, limit)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
-		"accounts": p.cfg.Scheduler.CompensationStatusAll(),
+		"accounts": accounts,
+		"total":    total,
+		"offset":   offset,
+		"limit":    limit,
 	})
 }
 
@@ -820,20 +823,23 @@ func (p *Panel) accountCompensationClaim(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": res.Error == "", "result": res})
 }
 
-// compensationAll 手动全量领取补偿（逐号查状态后领取；无待领的号静默跳过）。
+// compensationAll 领取指定页账号的补偿；前端分批调用，避免长时间占用单个 HTTP 请求。
 func (p *Panel) compensationAll(w http.ResponseWriter, r *http.Request) {
 	if p.cfg.Scheduler == nil {
 		writeErr(w, http.StatusNotImplemented, "scheduler not available")
 		return
 	}
-	results := p.cfg.Scheduler.ClaimCompensationNow()
+	total := len(p.cfg.Pool.List())
+	offset, limit := compensationPage(r, total, 5)
+	results, total := p.cfg.Scheduler.ClaimCompensationPage(offset, limit)
 	for _, res := range results {
 		if res.Claimed {
 			p.refreshCreditsQuiet(res.UID)
 		}
 	}
 	summary := scheduler.SummarizeCompensation(results)
-	log.Printf("panel: 手动全量补偿领取完成 合计=%d 领取=%d(+%dc) 跳过=%d 失败=%d",
+	log.Printf("panel: 手动补偿领取批次 offset=%d limit=%d 合计=%d 领取=%d(+%dc) 跳过=%d 失败=%d",
+		offset, limit,
 		summary.Total, summary.Claimed, summary.Credit, summary.Skipped, summary.Errored)
 	// ok=false 表示有账号没拿到确定结论；前端据此提示「查询失败」而不是
 	// 「没有待领补偿」——两者语义完全相反，不能混。
@@ -841,7 +847,28 @@ func (p *Panel) compensationAll(w http.ResponseWriter, r *http.Request) {
 		"ok":      summary.OK(),
 		"summary": summary,
 		"results": results,
+		"total":   total,
+		"offset":  offset,
+		"limit":   limit,
 	})
+}
+
+func compensationPage(r *http.Request, total, defaultLimit int) (offset, limit int) {
+	q := r.URL.Query()
+	limit = defaultLimit
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if limit > defaultLimit {
+		limit = defaultLimit
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
+		offset = n
+	}
+	if offset > total {
+		offset = total
+	}
+	return offset, limit
 }
 
 // b2i bool → int（汇总计数用）。
@@ -1001,12 +1028,24 @@ func (p *Panel) usageSave(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// packages 返回全部账号的积分包构成，供「积分构成」视图对比。
+// packages 返回账号积分包构成。带 offset/limit 时分页查询，供大账号池的积分构成视图使用；
+// 不带分页参数时仍返回全量数据，保持首页到期提醒的旧接口语义。
 //
 // 逐个账号向上游查（并发有上限，避免瞬时打满上游限流），失败只在对应账号上
 // 标 error，不影响其它账号——一个号 token 失效不该让整页空白。
 func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
 	accts := p.cfg.Pool.List()
+	total := len(accts)
+	offset, limit := packagePage(r, total)
+	if offset < total {
+		end := offset + limit
+		if end > total {
+			end = total
+		}
+		accts = accts[offset:end]
+	} else {
+		accts = nil
+	}
 	type row struct {
 		UID      string                   `json:"uid"`
 		Nickname string                   `json:"nickname"`
@@ -1050,7 +1089,35 @@ func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
 
 	// 余额降序：多的在前，便于和少的对比。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Remain > out[j].Remain })
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"accounts": out,
+		"total":    total,
+		"offset":   offset,
+		"limit":    limit,
+	})
+}
+
+func packagePage(r *http.Request, total int) (offset, limit int) {
+	q := r.URL.Query()
+	if q.Get("offset") == "" && q.Get("limit") == "" {
+		return 0, total
+	}
+	const defaultLimit = 10
+	const maxLimit = 50
+	limit = defaultLimit
+	if n, err := strconv.Atoi(q.Get("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	if n, err := strconv.Atoi(q.Get("offset")); err == nil && n > 0 {
+		offset = n
+	}
+	if offset > total {
+		offset = total
+	}
+	return offset, limit
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
