@@ -240,6 +240,7 @@ var idSeq uint64
 
 // writeMessagesError 按 Anthropic 错误形态写出（与 OpenAI 形态分开，客户端各自解析）。
 func writeMessagesError(w http.ResponseWriter, status int, errType, msg string) {
+	captureRequestError(w, errType, msg, "")
 	writeJSON(w, status, map[string]any{
 		"type": "error",
 		"error": map[string]any{

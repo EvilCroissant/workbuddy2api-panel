@@ -1,3 +1,24 @@
+/* 请求错误详情沿用面板已有表格、弹层与设计令牌。 */
+.req-result-head { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.req-result-head .ghost { padding: 2px 5px; color: var(--ink-3); }
+.req-error-preview { display: block; max-width: 220px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-size: 11.5px; }
+.req-error-dialog { width: 700px; }
+.req-error-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
+.req-error-meta div { min-width: 0; }
+.req-error-meta dt { margin-bottom: 3px; color: var(--ink-3); font-size: 11.5px; }
+.req-error-meta dd { color: var(--ink-2); font: 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+.req-error-section { margin-top: 20px; }
+.req-error-section h4 { margin-bottom: 7px; color: var(--ink-2); font-size: 12px; font-weight: 550; }
+.req-error-section pre { padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-2); color: var(--ink); font: 12px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.req-error-section p { color: var(--ink-2); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#reqErrorTruncated { margin-top: 10px; color: var(--warn); font-size: 11.5px; }
+@media (max-width: 760px) {
+  #reqBody tr > td.req-result { grid-column: 1 / -1; display: block; }
+  #reqBody tr > td.req-result::before { display: none; }
+  .req-error-preview { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+  .req-error-meta { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+}
+
 /* Layout for distributed API keys, using the panel's existing design tokens. */
 .key-summary {
   display: grid;

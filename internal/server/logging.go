@@ -499,7 +499,8 @@ func (t *requestTrace) event(status int) reqlog.Event {
 // 避免破坏 SSE 逐帧刷新。
 type responseObserver struct {
 	http.ResponseWriter
-	status int
+	status  int
+	failure *reqlog.ErrorDetail
 }
 
 func (o *responseObserver) WriteHeader(code int) {

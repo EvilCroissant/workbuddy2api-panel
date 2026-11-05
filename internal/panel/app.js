@@ -19,6 +19,7 @@ let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let mdLocks = [], mdRecent = [];
 let reqFilter = { q: '', outcome: '' };
 let reqEntries = [];
+let reqErrorCopyText = '', reqErrorTrigger = null;
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
 let usageData = null;
 let reqRangeState = null; // 请求记录的时间范围（用量页的见 trangeState）
@@ -1058,13 +1059,15 @@ async function loadCreditHistory() {
   renderCreditHistory(d);
 }
 
-/* reqMatch 请求记录筛选：q 对 IP/UA/模型/账号/请求 ID 做空格分词的 AND 包含匹配，
+/* reqMatch 请求记录筛选：q 对来源/模型/账号/请求 ID/错误原因做空格分词的 AND 包含匹配，
    outcome 精确匹配。两者都在已拉取的条目上做（最多 1000 条），不发新请求。 */
 function reqMatch(e, f) {
   f = f || reqFilter;
   if (f.outcome && String(e && e.outcome || '') !== f.outcome) return false;
   if (f.q) {
-    const text = [e && e.client_ip, e && e.user_agent, e && e.model, e && e.account, e && e.request_id]
+    const error = e && e.error || {};
+    const text = [e && e.client_ip, e && e.user_agent, e && e.model, e && e.account, e && e.request_id,
+      error.code, error.message, error.gateway_hint, error.upstream_code, error.upstream_request_id]
       .filter(Boolean).join(' ').toLowerCase();
     for (const kw of f.q.toLowerCase().split(/\s+/).filter(Boolean)) {
       if (!text.includes(kw)) return false;
@@ -1094,6 +1097,45 @@ function reqCreditCell(e) {
   return Number.isFinite(v) ? trimFixed(v.toFixed(2)) : '<span class="muted">—</span>';
 }
 
+function reqErrorSummary(e) {
+  const error = e && e.error;
+  if (!error) return '';
+  return [error.upstream_code, error.message || error.code].filter(Boolean).join(' · ');
+}
+
+function reqErrorFields(e) {
+  const error = e && e.error || {};
+  return [
+    ['请求 ID', e && e.request_id], ['模型', e && e.model], ['账号', e && e.account],
+    ['尝试次数', e && e.attempts], ['网关错误码', error.code],
+    ['上游业务码', error.upstream_code], ['上游请求 ID', error.upstream_request_id],
+  ].filter(pair => pair[1] != null && pair[1] !== '');
+}
+
+function openRequestError(e, trigger) {
+  const error = e && e.error || {};
+  const fields = reqErrorFields(e);
+  const message = error.message || '这条历史记录未保存具体错误信息；更新后的新请求会记录错误原因。';
+  $('reqErrorMeta').innerHTML = fields.map(([label, value]) =>
+    '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>').join('');
+  $('reqErrorMessage').textContent = message;
+  $('reqErrorHint').textContent = error.gateway_hint || '';
+  $('reqErrorHintBox').hidden = !error.gateway_hint;
+  $('reqErrorTruncated').hidden = !error.truncated;
+  reqErrorCopyText = requestLogText(e) + '\n' + fields.map(pair => pair.join('：')).join('\n') +
+    '\n错误说明：' + message + (error.gateway_hint ? '\n处理提示：' + error.gateway_hint : '') +
+    (error.truncated ? '\n错误信息已截断' : '');
+  reqErrorTrigger = trigger || null;
+  $('reqErrorVeil').classList.add('on');
+  $('btnReqErrorClose').focus();
+}
+
+function closeRequestError() {
+  $('reqErrorVeil').classList.remove('on');
+  if (reqErrorTrigger && reqErrorTrigger.isConnected) reqErrorTrigger.focus();
+  reqErrorTrigger = null;
+}
+
 /* renderRequestTable 渲染请求记录表。来源列是这一版的重点：IP 用等宽字体方便扫，
    UA 单行截断（完整值在 title 里，行本身用 requestLogText 作 tooltip）。 */
 function renderRequestTable() {
@@ -1105,9 +1147,13 @@ function renderRequestTable() {
     const ip = e && e.client_ip ? e.client_ip : '';
     const ua = e && e.user_agent ? e.user_agent : '';
     const rid = e && e.request_id ? e.request_id : '';
+    const failed = e && (e.error || Number(e.status) >= 400 || ['http_error', 'stream_error', 'interrupted'].includes(e.outcome));
+    const summary = reqErrorSummary(e);
     return '<tr title="' + esc(requestLogText(e)) + '">' +
       '<td class="num">' + esc(when) + '</td>' +
-      '<td>' + reqOutcomeTag(e) + '</td>' +
+      '<td class="req-result"><div class="req-result-head">' + reqOutcomeTag(e) +
+        (failed && rid ? '<button class="xs ghost" data-req-error="' + esc(rid) + '" aria-label="查看请求错误详情">详情</button>' : '') + '</div>' +
+        (summary ? '<span class="req-error-preview" title="' + esc(summary) + '">' + esc(summary) + '</span>' : '') + '</td>' +
       '<td>' + esc(e && e.model || '—') + '</td>' +
       '<td>' + esc(e && e.account || '—') + '</td>' +
       '<td>' + (ip ? '<span class="clip ip" title="' + esc(ip) + '">' + esc(ip) + '</span>' : '<span class="muted">—</span>') + '</td>' +
@@ -1134,6 +1180,23 @@ function renderRequestTable() {
    这段顶层绑定放在 requestLogText 之前，是为了让"纯函数切片"式前端测试
    （slice requestLogText → fmtBytes）只拿到无副作用的格式化函数。 */
 let reqQTimer = null;
+if ($('reqBody')) $('reqBody').addEventListener('click', ev => {
+  const button = ev.target.closest('button[data-req-error]');
+  if (!button) return;
+  const entry = reqEntries.find(e => e.request_id === button.dataset.reqError);
+  if (entry) openRequestError(entry, button);
+});
+if ($('btnReqErrorClose')) $('btnReqErrorClose').onclick = closeRequestError;
+if ($('reqErrorVeil')) $('reqErrorVeil').addEventListener('click', ev => {
+  if (ev.target === $('reqErrorVeil')) closeRequestError();
+});
+addEventListener('keydown', ev => {
+  if (ev.key === 'Escape' && $('reqErrorVeil').classList.contains('on')) closeRequestError();
+});
+if ($('btnReqErrorCopy')) $('btnReqErrorCopy').onclick = async () => {
+  try { await copyText(reqErrorCopyText); toast('错误详情已复制', 'ok'); }
+  catch (e) { toast('复制失败：' + e.message, 'err'); }
+};
 if ($('reqQ')) $('reqQ').oninput = () => {
   clearTimeout(reqQTimer);
   reqQTimer = setTimeout(() => { reqFilter.q = $('reqQ').value.trim(); renderRequestTable(); }, 150);
@@ -1172,6 +1235,8 @@ function requestLogText(e) {
     credit,
     cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens) === '—' ? '' : '命中 ' + cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens),
     e && e.request_id || '—',
+    e && e.error ? '错误 ' + [e.error.code, e.error.upstream_code, e.error.message,
+      e.error.gateway_hint, e.error.upstream_request_id].filter(Boolean).join(' · ') : '',
   ].filter(Boolean).join(' | ');
 }
 

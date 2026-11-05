@@ -1,7 +1,7 @@
 // Package reqlog 记录脱敏的请求级指标与可选 JSONL 归档。
 //
 // 内存指标有界保存最近 100 条并维护进程级计数；磁盘归档只写请求元数据，
-// 不写提示词、响应正文、Authorization 或其它凭证。可选的调用来源（客户端 IP /
+// 不写提示词、正常响应正文、Authorization 或其它凭证；失败时保存有界错误摘要。可选的调用来源（客户端 IP /
 // User-Agent，见 Event.ClientIP/UserAgent）由 server 按配置开关决定是否填充。
 // 归档队列满时丢弃并计数，不允许日志写盘阻塞模型请求。
 package reqlog
@@ -60,32 +60,44 @@ type Config struct {
 // ClientIP / UserAgent 是**调用来源**：面板「运行日志」用它回答"这条请求是谁打进来的"。
 // 二者由 server 侧按 logging.request_client_info 开关决定是否填充（关掉即保持空串，
 // 归档里不会出现来源字段）——来源信息比 token 计数敏感，运营可自行决定是否落盘。
-// 仍然不写提示词、响应正文、Authorization 或其它凭证。
+// 仍然不写提示词、正常响应正文、Authorization 或其它凭证。
 type Event struct {
-	Time             time.Time `json:"time"`
-	RequestID        string    `json:"request_id"`
-	KeyID            string    `json:"key_id,omitempty"` // public distributed-key ID, never a credential
-	Path             string    `json:"path"`
-	Account          string    `json:"account,omitempty"`
-	Model            string    `json:"model,omitempty"`
-	Status           int       `json:"status"`
-	OK               bool      `json:"ok"`
-	Outcome          string    `json:"outcome"`
-	DurationMs       int64     `json:"duration_ms"`
-	TTFBMs           int64     `json:"ttfb_ms,omitempty"`
-	Attempts         int       `json:"attempts,omitempty"`
-	PromptTokens     int64     `json:"prompt_tokens,omitempty"`
-	CompletionTokens int64     `json:"completion_tokens,omitempty"`
-	TotalTokens      int64     `json:"total_tokens,omitempty"`
-	TokenKnown       bool      `json:"token_known"`
-	Credit           float64   `json:"credit,omitempty"`
-	HasCredit        bool      `json:"credit_known"`
+	Time             time.Time    `json:"time"`
+	RequestID        string       `json:"request_id"`
+	KeyID            string       `json:"key_id,omitempty"` // public distributed-key ID, never a credential
+	Path             string       `json:"path"`
+	Account          string       `json:"account,omitempty"`
+	Model            string       `json:"model,omitempty"`
+	Status           int          `json:"status"`
+	OK               bool         `json:"ok"`
+	Outcome          string       `json:"outcome"`
+	Error            *ErrorDetail `json:"error,omitempty"`
+	DurationMs       int64        `json:"duration_ms"`
+	TTFBMs           int64        `json:"ttfb_ms,omitempty"`
+	Attempts         int          `json:"attempts,omitempty"`
+	PromptTokens     int64        `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64        `json:"completion_tokens,omitempty"`
+	TotalTokens      int64        `json:"total_tokens,omitempty"`
+	TokenKnown       bool         `json:"token_known"`
+	Credit           float64      `json:"credit,omitempty"`
+	HasCredit        bool         `json:"credit_known"`
 	// CacheHitTokens / CacheMissTokens 上游前缀缓存命中/未命中 token（issue #92）。
 	// 上游未回该维度时两者皆零值省略；hit=0 + miss>0 即整段未命中。
 	CacheHitTokens  int64  `json:"cache_hit_tokens,omitempty"`
 	CacheMissTokens int64  `json:"cache_miss_tokens,omitempty"`
 	ClientIP        string `json:"client_ip,omitempty"`
 	UserAgent       string `json:"user_agent,omitempty"`
+}
+
+// ErrorDetail 只保存错误说明和排障标识，不归档整个上游响应或请求内容。
+// Code 为网关错误码；UpstreamCode 为上游业务码（如果响应中有提供）。
+type ErrorDetail struct {
+	Code              string `json:"code,omitempty"`
+	Message           string `json:"message,omitempty"`
+	Hint              string `json:"gateway_hint,omitempty"`
+	UpstreamCode      string `json:"upstream_code,omitempty"`
+	UpstreamRequestID string `json:"upstream_request_id,omitempty"`
+	Truncated         bool   `json:"truncated,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

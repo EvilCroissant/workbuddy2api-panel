@@ -1323,7 +1323,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <span class="note" id="reqNote">—</span>
         </header>
         <div class="fbar" id="reqFilter">
-          <input id="reqQ" type="search" placeholder="搜索 IP / UA / 模型 / 账号 / 请求 ID" aria-label="搜索请求记录">
+          <input id="reqQ" type="search" placeholder="搜索来源 / 模型 / 账号 / 请求 ID / 错误原因" aria-label="搜索请求记录">
           <select id="reqOutcome" aria-label="按结果筛选">
             <option value="">全部结果</option>
             <option value="success">成功</option>
@@ -1399,6 +1399,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
 <!-- 抽屉遮罩：仅 ≤760px 由 app.js 切 .on；桌面端 display:none，不参与布局 -->
 <div class="nav-veil" id="navVeil"></div>
+
+<!-- 请求错误详情 -->
+<div class="veil" id="reqErrorVeil">
+  <div class="dlg req-error-dialog" role="dialog" aria-modal="true" aria-labelledby="reqErrorTitle">
+    <header>
+      <h3 id="reqErrorTitle">请求错误详情</h3>
+      <div class="hint">查看本次失败的具体原因与上游排障标识。</div>
+    </header>
+    <div class="body">
+      <dl class="req-error-meta" id="reqErrorMeta"></dl>
+      <div class="req-error-section"><h4>错误说明</h4><pre id="reqErrorMessage"></pre></div>
+      <div class="req-error-section" id="reqErrorHintBox" hidden><h4>处理提示</h4><p id="reqErrorHint"></p></div>
+      <p class="hint" id="reqErrorTruncated" hidden>错误信息过长，已截断保存。</p>
+    </div>
+    <footer>
+      <button id="btnReqErrorCopy">复制详情</button>
+      <span class="grow"></span>
+      <button id="btnReqErrorClose">关闭</button>
+    </footer>
+  </div>
+</div>
 
 <!-- 积分任务 -->
 <div class="veil" id="taskVeil">

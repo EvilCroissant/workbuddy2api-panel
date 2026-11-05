@@ -181,8 +181,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				status = http.StatusOK
 			}
 			event := trace.event(status)
+			event.Error = obs.failure
 			if !completed {
 				event.Status, event.OK, event.Outcome = http.StatusInternalServerError, false, reqlog.OutcomeHTTPError
+			}
+			if event.Error != nil {
+				log.Printf("WARN: [server] request failed rid=%s status=%d code=%s upstream_code=%s upstream_request_id=%s message=%q",
+					event.RequestID, event.Status, event.Error.Code, event.Error.UpstreamCode, event.Error.UpstreamRequestID, event.Error.Message)
 			}
 			if h.cfg.RequestLog != nil {
 				h.cfg.RequestLog.Record(event)
@@ -1138,6 +1143,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				upstream.WithMarkupRepair(repair))
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
+				captureRequestError(w, "empty_stream", "上游返回了空流，没有有效响应帧", "")
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
 				// 兜底（HTTP 头已发出只能 200），但这是上游缺陷不是成功——日志/
 				// 状态收敛到 502 观测，与非流式 Aggregate 空流→502 upstream_parse
@@ -1153,6 +1159,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// 在流开始前就做了，于是一个正在限流的号被当成健康号，粘性还会把
 				// 整个会话钉在它身上，后续每轮都失败。
 				kind := upstream.FrameKind(errFrame)
+				captureRequestError(w, "stream_error", errFrame, h.hintOf(kind, errFrame, bareModel, reqHasImage, nil))
 				h.applyErrorPolicy(acct.UID, kind, errFrame, bareModel, nil)
 				st.status = http.StatusServiceUnavailable
 				st.outcome = reqlog.OutcomeStreamError
@@ -1614,6 +1621,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeOpenAIError(w http.ResponseWriter, status int, code, msg string) {
+	captureRequestError(w, code, msg, "")
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
 			"message": msg,
@@ -1638,6 +1646,7 @@ func writeOpenAIErrorHint(w http.ResponseWriter, status int, code, msg, hint str
 		writeOpenAIError(w, status, code, msg)
 		return
 	}
+	captureRequestError(w, code, msg, hint)
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
 			"message":      msg,
