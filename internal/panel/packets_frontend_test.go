@@ -7,36 +7,6 @@ import (
 	"testing"
 )
 
-func TestClaimRealIPConfigForm(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node not installed")
-	}
-	script := `const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
-const src=fs.readFileSync('app.js','utf8'),html=fs.readFileSync('index.html','utf8');
-assert.match(html,/<input type="checkbox" name="claim_use_real_ip">/);
-const elements={claim_use_real_ip:{type:'checkbox',checked:false},claim_trusted_proxies:{type:'text',value:'',disabled:false}};
-const nodes={cfgForm:{elements},cfgPath:{},cfgNote:{}};
-let config={panel:{claim_use_real_ip:true}};
-const ctx={cfgLoaded:null,api:async()=>({config}),$:id=>nodes[id],markDurationFields(){},toast(message){throw Error(message);}};
-vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('const CFG_MAP ='),src.indexOf('/* Go 时长字段即时校验')),ctx);
-(async()=>{
-  await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,true);assert.equal(elements.claim_trusted_proxies.disabled,true);
-  let result=ctx.collectConfig();assert.equal(result.panel.claim_use_real_ip,true);assert.equal(JSON.stringify(result.panel.claim_trusted_proxies),'[]');
-  elements.claim_use_real_ip.checked=false;ctx.updateClaimProxyFields();assert.equal(elements.claim_trusted_proxies.disabled,false);
-  elements.claim_trusted_proxies.value='172.27.0.1/32, ::1/128';result=ctx.collectConfig();assert.equal(result.panel.claim_use_real_ip,false);assert.equal(JSON.stringify(result.panel.claim_trusted_proxies),'["172.27.0.1/32","::1/128"]');
-  config=result;await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,false);assert.equal(elements.claim_trusted_proxies.disabled,false);assert.equal(elements.claim_trusted_proxies.value,'172.27.0.1/32, ::1/128');
-  config={panel:{claim_trusted_proxies:['127.0.0.1/32']}};await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,true);assert.equal(elements.claim_trusted_proxies.disabled,true);assert.equal(elements.claim_trusted_proxies.value,'127.0.0.1/32');
-})().catch(err=>{console.error(err);process.exit(1)});`
-	file := filepath.Join(t.TempDir(), "claim-proxy-config.cjs")
-	if err := os.WriteFile(file, []byte(script), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if out, err := exec.Command(node, file).CombinedOutput(); err != nil {
-		t.Fatalf("claim proxy config form: %v\n%s", err, out)
-	}
-}
-
 func TestPacketFrontendLifecycle(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

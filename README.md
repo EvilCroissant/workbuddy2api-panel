@@ -360,8 +360,6 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
 | `server.read_timeout` | `300s` | 入站请求读取（含 body 上传）总时长上限；大上下文/文件块经反代转发超时会 400 `read body: i/o timeout`；`0` = 不限制；改动需重启（#100） |
 | `panel.package_detail_limit` | `5` | 积分构成页单账号默认展示的最早到期包数；其余未用完包与已用完包聚合折叠 |
-| `panel.claim_use_real_ip` | `true` | 红包领取默认使用反代覆盖的单个有效 `X-Real-IP`，无需填写 CIDR；缺失或格式错误返回 400。适用于后端仅经受控反代访问的部署，修改后需重启 |
-| `panel.claim_trusted_proxies` | `[]` | `claim_use_real_ip=false` 时使用的可信反代 CIDR 列表；仅这些代理可通过 X-Forwarded-For / X-Real-IP 提供客户端 IP。留空按直连 IP 去重，配置后需重启 |
 | `logging.request_archive_enabled` | `true` | 请求元数据及失败摘要 JSONL 归档开关；不记录提示词、正常响应正文或 Authorization |
 | `logging.request_retention_days` | `7` | 请求归档保留天数；超期文件在启动和周期清理时删除 |
 | `logging.request_archive_max_mb` | `100` | 请求归档总容量上限（MiB）；超限优先删除最旧文件 |
@@ -657,9 +655,7 @@ http://127.0.0.1:7863/panel/
 
 如果上游没有返回所需用量、流中断而缺少结算信息，或进程在请求期间退出，该 Key 会进入「待核对」。管理员核实上游扣费后，在红包详情填写累计已用额度并保存，即可解除暂停。整批收回会删除全部关联 Key，保留红包记录与历史用量；已在执行的请求会完成结算。
 
-红包默认使用反代传入的 `X-Real-IP`（`panel.claim_use_real_ip=true`），现有配置未声明该字段时也默认启用，无需在面板单独开启或填写代理 CIDR。Nginx 保持 `proxy_set_header X-Real-IP $remote_addr;`，后端只通过受控反代提供访问。开启后仅采用单个有效的 `X-Real-IP`，忽略 `X-Forwarded-For` 和 CIDR 列表；缺失、重复或格式错误时返回 400，不消耗红包份数，也不回落到共享网关 IP。IPv4、IPv6 均支持，IPv4 映射地址会统一成普通 IPv4，避免同一 IP 重复领取。
-
-直连部署、需要按代理地址校验或处理多级代理链时，可在「配置 → 服务」关闭上述开关，保存并重启；显式配置的 `false` 会保留。需要校验代理地址时再填写「红包领取可信代理（CIDR）」，例如代理在网关看来是 `172.19.0.2`，填写 `172.19.0.2/32`。代理应追加或覆盖正确的 `X-Forwarded-For`；服务端从右向左跳过已配置的代理，取第一个非可信跳点作为客户端 IP。关闭且未配置 CIDR 时按 TCP 对端 IP 去重。
+红包领取统一使用反代传入的单个有效 `X-Real-IP`，无需额外配置。Nginx 保持 `proxy_set_header X-Real-IP $remote_addr;`，后端通过反代提供访问。缺失、重复或格式错误时返回 400，不消耗红包份数，也不回落到共享网关 IP。IPv4、IPv6 均支持，IPv4 映射地址会统一成普通 IPv4，避免同一 IP 重复领取。
 
 红包与 API Key 使用同一个 `data/api-keys.json` 原子保存，密钥和领取令牌均加密，IP 只保存为带红包盐的摘要。兼容旧数组和 v2 红包文件；首次创建新版红包时升级为 v3 对象，增加整数总额度与已分配额度，原有 Key 和旧红包自动保留；备份、迁移时同时保存 `api-keys.json` 和 `api-keys.json.key`。降级到不支持 v3 的旧版本前需恢复升级前备份，避免旧程序丢失领取时分配的额度记录。
 

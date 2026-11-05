@@ -17,6 +17,7 @@ func TestPacketManagementAndPublicClaim(t *testing.T) {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.RemoteAddr = "203.0.113.8:1234"
 		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("X-Real-IP", "203.0.113.8")
 		if key != "" {
 			r.Header.Set("Authorization", "Bearer "+key)
 		}
@@ -94,31 +95,7 @@ func TestPacketManagementAndPublicClaim(t *testing.T) {
 		t.Fatal("bad standalone claim page")
 	}
 }
-func TestPacketClaimIPTrust(t *testing.T) {
-	for _, tc := range []struct {
-		peer, xff, real, want string
-		trusted               []string
-	}{
-		{"203.0.113.1:100", "1.2.3.4", "", "203.0.113.1", nil},
-		{"203.0.113.1:100", "1.2.3.4", "203.0.113.8", "203.0.113.1", nil},
-		{"127.0.0.1:100", "203.0.113.8", "", "203.0.113.8", []string{"127.0.0.1/32"}},
-		{"127.0.0.1:100", "1.2.3.4, 203.0.113.8", "", "203.0.113.8", []string{"127.0.0.1/32"}},
-		{"127.0.0.1:100", "1.2.3.4, 10.1.0.4", "", "1.2.3.4", []string{"127.0.0.1/32", "10.1.0.0/16"}},
-		{"127.0.0.1:100", "bad", "", "127.0.0.1", []string{"127.0.0.1/32"}},
-		{"[::ffff:203.0.113.8]:10", "", "", "203.0.113.8", nil},
-	} {
-		p := New(Config{ClaimTrustedProxies: tc.trusted})
-		r := httptest.NewRequest("POST", "/panel/api/claim/token", nil)
-		r.RemoteAddr = tc.peer
-		r.Header.Set("X-Forwarded-For", tc.xff)
-		r.Header.Set("X-Real-IP", tc.real)
-		if got := p.claimIP(r); got != tc.want {
-			t.Fatalf("peer=%s xff=%s got=%s want=%s", tc.peer, tc.xff, got, tc.want)
-		}
-	}
-}
-
-func TestPacketClaimRealIPMode(t *testing.T) {
+func TestPacketClaimIP(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		values []string
@@ -137,8 +114,7 @@ func TestPacketClaimRealIPMode(t *testing.T) {
 		{"multiple-values", []string{"203.0.113.8", "203.0.113.9"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Even a matching legacy CIDR must not select the forwarding chain.
-			p := New(Config{ClaimUseRealIP: true, ClaimTrustedProxies: []string{"172.27.0.0/16"}})
+			p := New(Config{})
 			r := httptest.NewRequest("POST", "/panel/api/claim/token", nil)
 			r.RemoteAddr = "[::ffff:172.27.0.1]:45678"
 			r.Header.Set("X-Forwarded-For", "198.51.100.99")
@@ -152,7 +128,7 @@ func TestPacketClaimRealIPMode(t *testing.T) {
 	}
 }
 
-func TestPacketClaimViaRealIPWithoutCIDRs(t *testing.T) {
+func TestPacketClaimViaRealIP(t *testing.T) {
 	keys, err := httpauth.OpenKeys(filepath.Join(t.TempDir(), "keys.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +137,7 @@ func TestPacketClaimViaRealIPWithoutCIDRs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := New(Config{APIKey: "admin", Keys: keys, ClaimUseRealIP: true})
+	p := New(Config{APIKey: "admin", Keys: keys})
 	claim := func(real, peer string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("POST", "/panel/api/claim/"+packet.ClaimToken, strings.NewReader("{}"))
 		r.RemoteAddr = peer

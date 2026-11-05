@@ -35,16 +35,14 @@ import (
 
 // Config 面板依赖（main 装配注入）。
 type Config struct {
-	Pool                *pool.Pool
-	Upstream            *upstream.Client
-	Scheduler           *scheduler.Scheduler // 手动触发签到/保活；nil 时对应接口返回 501
-	AuthDir             string               // OAuth 登录完成后凭证落盘目录
-	APIKey              string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
-	Keys                *httpauth.KeyStore   // 分发 Key 只用于 /v1/*，面板始终使用管理员 APIKey
-	ClaimUseRealIP      bool                 // Read the proxy's X-Real-IP directly; backend access must be restricted to controlled proxies.
-	ClaimTrustedProxies []string             // CIDRs whose forwarding headers may identify packet claimants
-	RedisMode           string               // "upstash" / "noop"，仅观测透出
-	Version             string               // 面板版本号（展示用）
+	Pool      *pool.Pool
+	Upstream  *upstream.Client
+	Scheduler *scheduler.Scheduler // 手动触发签到/保活；nil 时对应接口返回 501
+	AuthDir   string               // OAuth 登录完成后凭证落盘目录
+	APIKey    string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
+	Keys      *httpauth.KeyStore   // 分发 Key 只用于 /v1/*，面板始终使用管理员 APIKey
+	RedisMode string               // "upstash" / "noop"，仅观测透出
+	Version   string               // 面板版本号（展示用）
 
 	// Live 运行期可变配置（在线改配置立即生效）。
 	Live *livecfg.Holder

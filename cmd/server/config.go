@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -29,9 +28,7 @@ type Config struct {
 
 	Panel struct {
 		// PackageDetailLimit 积分构成页单账号默认展示的最近到期包数；<=0 回落 5。
-		PackageDetailLimit  int      `json:"package_detail_limit"`
-		ClaimUseRealIP      bool     `json:"claim_use_real_ip"` // Default true: read the reverse proxy's X-Real-IP without a CIDR list.
-		ClaimTrustedProxies []string `json:"claim_trusted_proxies"`
+		PackageDetailLimit int `json:"package_detail_limit"`
 	} `json:"panel"`
 
 	Logging struct {
@@ -281,7 +278,6 @@ func Default() *Config {
 	c.Cooldown.SoftRateMax = "2h"
 	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
-	c.Panel.ClaimUseRealIP = true
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
@@ -504,11 +500,6 @@ func (c *Config) normalize() error {
 	}
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
-	}
-	for _, cidr := range c.Panel.ClaimTrustedProxies {
-		if _, err := netip.ParsePrefix(cidr); err != nil {
-			return fmt.Errorf("panel.claim_trusted_proxies: invalid CIDR %q", cidr)
-		}
 	}
 	if c.Logging.RequestRetentionDays <= 0 {
 		c.Logging.RequestRetentionDays = 7

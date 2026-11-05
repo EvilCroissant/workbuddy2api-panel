@@ -1176,12 +1176,6 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <label class="fld"><span class="lb">单账号明细默认展示条数</span>
               <input name="package_detail_limit" type="number" min="1" placeholder="5">
               <span class="hint">积分构成页按最早到期展示，其余未用完包聚合</span></label>
-            <label class="fld"><span class="switch"><span class="lb">红包领取通过反向代理获取真实 IP</span>
-              <input type="checkbox" name="claim_use_real_ip"></span>
-              <span class="hint">默认开启，直接读取反代覆盖的 X-Real-IP，无需填写 CIDR；适用于后端仅经受控反代访问的部署。缺失或格式错误时停止领取。修改需重启。</span></label>
-            <label class="fld"><span class="lb">红包领取可信代理（CIDR）</span>
-              <input name="claim_trusted_proxies" placeholder="例如：127.0.0.1/32, 172.19.0.2/32">
-              <span class="hint">关闭上方开关时生效。填网关看到的代理 IP 网段，逗号分隔；留空使用直连 IP。需重启。</span></label>
           </div>
         </div>
 

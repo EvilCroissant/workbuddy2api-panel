@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"errors"
 	"log"
-	"net"
 	"net/http"
 	"net/netip"
 	"strings"
@@ -145,11 +144,7 @@ func (p *Panel) claimPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := p.claimIP(r)
 	if ip == "" {
-		if p.cfg.ClaimUseRealIP {
-			writeErr(w, 400, "未识别到客户端 IP，请检查反向代理是否设置了单个有效的 X-Real-IP")
-		} else {
-			writeErr(w, 400, "未识别到客户端 IP")
-		}
+		writeErr(w, 400, "未识别到客户端 IP，请检查反向代理是否设置了单个有效的 X-Real-IP")
 		return
 	}
 	result, err := p.cfg.Keys.ClaimPacket(r.PathValue("token"), ip)
@@ -169,58 +164,17 @@ func (p *Panel) claimPage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(head + "</head>\n" + claimHTML))
 }
-func (p *Panel) trustedClaimProxy(ip netip.Addr) bool {
-	for _, cidr := range p.cfg.ClaimTrustedProxies {
-		if block, err := netip.ParsePrefix(cidr); err == nil && block.Contains(ip.Unmap()) {
-			return true
-		}
-	}
-	return false
-}
 func (p *Panel) claimIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer, err := netip.ParseAddr(strings.TrimSpace(host))
-	if err != nil {
+	// The reverse proxy supplies the client IP; a shared gateway is never a claimant.
+	values := r.Header.Values("X-Real-IP")
+	if len(values) != 1 {
 		return ""
 	}
-	peer = peer.Unmap()
-	if p.cfg.ClaimUseRealIP {
-		// This explicit mode requires the proxy to overwrite X-Real-IP. Never
-		// fall back to the shared gateway or a client-supplied forwarding chain.
-		values := r.Header.Values("X-Real-IP")
-		if len(values) == 1 {
-			if real, err := netip.ParseAddr(strings.TrimSpace(values[0])); err == nil && real.Zone() == "" {
-				return real.Unmap().String()
-			}
-		}
+	real, err := netip.ParseAddr(strings.TrimSpace(values[0]))
+	if err != nil || real.Zone() != "" {
 		return ""
 	}
-	if !p.trustedClaimProxy(peer) {
-		return peer.String()
-	}
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		hops := strings.Split(forwarded, ",")
-		if len(hops) > 32 {
-			return peer.String()
-		}
-		// Walk toward the client only while the current hop is explicitly trusted.
-		current := peer
-		for i := len(hops) - 1; i >= 0 && p.trustedClaimProxy(current); i-- {
-			next, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
-			if err != nil {
-				return peer.String()
-			}
-			current = next.Unmap()
-		}
-		return current.String()
-	}
-	if real, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
-		return real.Unmap().String()
-	}
-	return peer.String()
+	return real.Unmap().String()
 }
 func packetError(w http.ResponseWriter, err error) {
 	status := 500

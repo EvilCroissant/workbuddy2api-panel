@@ -1273,8 +1273,6 @@ const CFG_MAP = {
   international_account_order: ['pool', 'account_order', 'international'],
   listen: ['listen'], api_key: ['api_key'],
   package_detail_limit: ['panel', 'package_detail_limit'],
-  claim_use_real_ip: ['panel', 'claim_use_real_ip'],
-  claim_trusted_proxies: ['panel', 'claim_trusted_proxies'],
   checkin_hours: ['schedule', 'checkin_hours'], checkin_enabled: ['schedule', 'checkin_enabled'], growth_hours: ['schedule', 'growth_hours'], growth_enabled: ['schedule', 'growth_enabled'],
   travel_hours: ['schedule', 'travel_hours'], travel_enabled: ['schedule', 'travel_enabled'],
   activity_hours: ['schedule', 'activity_hours'], activity_enabled: ['schedule', 'activity_enabled'],
@@ -1319,11 +1317,6 @@ function put(obj, path, val) {
   for (let i = 0; i < path.length - 1; i++) { if (typeof o[path[i]] !== 'object' || o[path[i]] === null) o[path[i]] = {}; o = o[path[i]]; }
   o[path[path.length - 1]] = val;
 }
-function updateClaimProxyFields() {
-  const fields = $('cfgForm').elements;
-  if (fields.claim_trusted_proxies) fields.claim_trusted_proxies.disabled = !!fields.claim_use_real_ip?.checked;
-}
-
 async function loadConfig() {
   try {
     const d = await api('config');
@@ -1334,11 +1327,10 @@ async function loadConfig() {
       const el = f.elements[name];
       if (!el) continue;
       const v = dig(cfgLoaded, path);
-      if (el.type === 'checkbox') el.checked = name === 'claim_use_real_ip' && v == null ? true : !!v;
+      if (el.type === 'checkbox') el.checked = !!v;
       else if (Array.isArray(v)) el.value = v.join(', ');
       else el.value = v == null ? (name.startsWith('strategy_') ? 'weighted_random' : '') : v;
     }
-    updateClaimProxyFields();
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
     $('cfgNote').textContent = '';
   } catch (e) { toast('读取配置失败：' + e.message, 'err'); }
@@ -1354,7 +1346,7 @@ function collectConfig() {
     else {
       const raw = el.value.trim();
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
-      if (name.endsWith('_account_order') || name === 'claim_trusted_proxies') v = raw.split(/[,，\s]+/).filter(Boolean);
+      if (name.endsWith('_account_order')) v = raw.split(/[,，\s]+/).filter(Boolean);
       else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
@@ -1387,7 +1379,6 @@ function markDurationFields() {
   }
 }
 $('cfgForm').addEventListener('input', ev => {
-  if (ev.target.name === 'claim_use_real_ip') updateClaimProxyFields();
   if (DURATION_FIELDS.includes(ev.target.name)) markDurationFields();
 });
 $('btnEye').onclick = () => {

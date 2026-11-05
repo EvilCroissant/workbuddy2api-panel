@@ -8,9 +8,7 @@
     "read_timeout": "300s"
   },
   "panel": {
-    "package_detail_limit": 5,
-    "claim_use_real_ip": true,
-    "claim_trusted_proxies": []
+    "package_detail_limit": 5
   },
   "logging": {
     "request_archive_enabled": true,
