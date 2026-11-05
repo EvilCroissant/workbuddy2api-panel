@@ -145,7 +145,11 @@ func (p *Panel) claimPacket(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := p.claimIP(r)
 	if ip == "" {
-		writeErr(w, 400, "未识别到客户端 IP")
+		if p.cfg.ClaimUseRealIP {
+			writeErr(w, 400, "未识别到客户端 IP，请检查反向代理是否设置了单个有效的 X-Real-IP")
+		} else {
+			writeErr(w, 400, "未识别到客户端 IP")
+		}
 		return
 	}
 	result, err := p.cfg.Keys.ClaimPacket(r.PathValue("token"), ip)
@@ -183,6 +187,17 @@ func (p *Panel) claimIP(r *http.Request) string {
 		return ""
 	}
 	peer = peer.Unmap()
+	if p.cfg.ClaimUseRealIP {
+		// This explicit mode requires the proxy to overwrite X-Real-IP. Never
+		// fall back to the shared gateway or a client-supplied forwarding chain.
+		values := r.Header.Values("X-Real-IP")
+		if len(values) == 1 {
+			if real, err := netip.ParseAddr(strings.TrimSpace(values[0])); err == nil && real.Zone() == "" {
+				return real.Unmap().String()
+			}
+		}
+		return ""
+	}
 	if !p.trustedClaimProxy(peer) {
 		return peer.String()
 	}

@@ -864,12 +864,13 @@ function mdAvailabilityTag(m) {
   return ' <span class="tag ' + av.cls + ' md-avail" title="' + esc(av.tip) + '">' + esc(av.label) + '</span>';
 }
 
-// mdRowHtml 单个模型行（纯渲染，便于独立测试）。
-function mdRowHtml(m, pr) {
+// 模型目录与授权选择共用同一行；selected 为布尔值时显示勾选框。
+function mdRowHtml(m, pr, selected) {
+  const selectable = typeof selected === 'boolean';
   const eff = (m.supported_efforts || []).slice();
   if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）');
   const effs = eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')
-    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
+    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.unknown ? '—' : m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
   // 能力徽标：默认模型 / 工具调用 / 视觉 / 纯推理（上游目录全字段透出，缺失不显示）
   const caps = [];
   if (m.is_default) caps.push('<span class="tag ok">默认</span>');
@@ -878,7 +879,10 @@ function mdRowHtml(m, pr) {
   if (m.supports_reasoning && !m.can_disable_thinking) caps.push('<span class="tag warn">思考常开</span>');
   const capHtml = caps.length ? '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
-  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
+  const firstCell = selectable
+    ? '<td class="key-model-check"><input type="checkbox" data-key-model-id="' + esc(m.id) + '" aria-label="选择 ' + esc(m.id) + '"' + (selected ? ' checked' : '') + '></td>'
+    : '<td class="mark" aria-hidden="true"><i></i></td>';
+  return '<tr' + (selectable ? ' data-key-model-row="' + esc(m.id) + '"' : '') + '>' + firstCell + '<td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
     '<td>' + (m.default_effort ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +
@@ -1269,6 +1273,7 @@ const CFG_MAP = {
   international_account_order: ['pool', 'account_order', 'international'],
   listen: ['listen'], api_key: ['api_key'],
   package_detail_limit: ['panel', 'package_detail_limit'],
+  claim_use_real_ip: ['panel', 'claim_use_real_ip'],
   claim_trusted_proxies: ['panel', 'claim_trusted_proxies'],
   checkin_hours: ['schedule', 'checkin_hours'], checkin_enabled: ['schedule', 'checkin_enabled'], growth_hours: ['schedule', 'growth_hours'], growth_enabled: ['schedule', 'growth_enabled'],
   travel_hours: ['schedule', 'travel_hours'], travel_enabled: ['schedule', 'travel_enabled'],
@@ -1314,6 +1319,10 @@ function put(obj, path, val) {
   for (let i = 0; i < path.length - 1; i++) { if (typeof o[path[i]] !== 'object' || o[path[i]] === null) o[path[i]] = {}; o = o[path[i]]; }
   o[path[path.length - 1]] = val;
 }
+function updateClaimProxyFields() {
+  const fields = $('cfgForm').elements;
+  if (fields.claim_trusted_proxies) fields.claim_trusted_proxies.disabled = !!fields.claim_use_real_ip?.checked;
+}
 
 async function loadConfig() {
   try {
@@ -1325,10 +1334,11 @@ async function loadConfig() {
       const el = f.elements[name];
       if (!el) continue;
       const v = dig(cfgLoaded, path);
-      if (el.type === 'checkbox') el.checked = !!v;
+      if (el.type === 'checkbox') el.checked = name === 'claim_use_real_ip' && v == null ? true : !!v;
       else if (Array.isArray(v)) el.value = v.join(', ');
       else el.value = v == null ? (name.startsWith('strategy_') ? 'weighted_random' : '') : v;
     }
+    updateClaimProxyFields();
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
     $('cfgNote').textContent = '';
   } catch (e) { toast('读取配置失败：' + e.message, 'err'); }
@@ -1377,6 +1387,7 @@ function markDurationFields() {
   }
 }
 $('cfgForm').addEventListener('input', ev => {
+  if (ev.target.name === 'claim_use_real_ip') updateClaimProxyFields();
   if (DURATION_FIELDS.includes(ev.target.name)) markDurationFields();
 });
 $('btnEye').onclick = () => {
@@ -1462,12 +1473,6 @@ function normalizeKeyModelId(value) {
   return model === 'cn:' || model === 'global:' || model.length > 200 ? '' : model;
 }
 
-function keyModelRegion(model) {
-  if (/^global:/.test(model)) return { label: '国际', cls: 'is-global' };
-  if (/^cn:/.test(model)) return { label: '国内', cls: 'is-cn' };
-  return { label: '自定义', cls: 'is-custom' };
-}
-
 function keyModelPayload(prefix) {
   const state = keyModelPickerStates[prefix];
   return state && state.mode === 'selected' ? state.selected.slice() : [];
@@ -1491,7 +1496,7 @@ function keyModelListHtml(state) {
     const id = normalizeKeyModelId(raw && raw.id);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    entries.push({ id, name: String(raw && raw.name || ''), unknown: false });
+    entries.push({ ...raw, id, name: String(raw && raw.name || ''), unknown: false });
   }
   for (const id of state.selected) {
     if (!seen.has(id)) entries.push({ id, name: '目录中未找到，仍保留原授权', unknown: true });
@@ -1504,15 +1509,8 @@ function keyModelListHtml(state) {
     !query || item.id.toLowerCase().includes(query) || item.name.toLowerCase().includes(query));
   if (!filtered.length) return '<div class="key-model-state">没有匹配的模型。</div>';
 
-  return filtered.map(item => {
-    const region = keyModelRegion(item.id);
-    return '<label class="key-model-option" title="' + esc(item.id) + '">' +
-      '<input type="checkbox" data-key-model-id="' + esc(item.id) + '"' +
-      (selected.has(item.id) ? ' checked' : '') + '>' +
-      '<span class="key-model-option-main"><code>' + esc(item.id) + '</code>' +
-      (item.name ? '<small>' + esc(item.name) + '</small>' : '') + '</span>' +
-      '<span class="key-model-region ' + region.cls + '">' + region.label + '</span></label>';
-  }).join('');
+  return '<table class="acc md key-model-table"><thead><tr><th class="key-model-check">选择</th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead><tbody>' +
+    filtered.map(item => mdRowHtml(item, null, selected.has(item.id))).join('') + '</tbody></table>';
 }
 
 function renderKeyModelPicker(prefix) {
@@ -1660,9 +1658,14 @@ for (const [prefix, cfg] of Object.entries(KEY_MODEL_PICKERS)) {
   };
   $(cfg.list).onclick = ev => {
     const button = ev.target.closest('button[data-key-model-action="retry"]');
-    if (!button) return;
-    keyModelCatalog = null;
-    loadKeyModelCatalog();
+    if (button) {
+      keyModelCatalog = null;
+      loadKeyModelCatalog();
+      return;
+    }
+    if (ev.target.closest('input, button, a')) return;
+    const row = ev.target.closest('tr[data-key-model-row]');
+    if (row) setKeyModelChecked(prefix, row.dataset.keyModelRow, !keyModelPickerStates[prefix].selected.includes(row.dataset.keyModelRow));
   };
   $(cfg.addManual).onclick = () => addKeyModelManual(prefix);
   $(cfg.manual).onkeydown = ev => {

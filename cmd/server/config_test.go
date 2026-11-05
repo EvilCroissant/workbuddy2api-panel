@@ -7,10 +7,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 func TestDefault(t *testing.T) {
 	c := Default()
+	if !c.Panel.ClaimUseRealIP {
+		t.Fatal("real IP mode must be enabled by default")
+	}
 	if c.Listen != ":7863" {
 		t.Errorf("listen=%s", c.Listen)
 	}
@@ -867,6 +875,80 @@ func TestClaimTrustedProxyConfig(t *testing.T) {
 	for _, raw := range []string{`{"panel":{"claim_trusted_proxies":["*"]}}`, `{"panel":{"claim_trusted_proxies":["127.0.0.1"]}}`} {
 		if _, err := ParseConfig([]byte(raw)); err == nil {
 			t.Fatalf("invalid proxy range accepted: %s", raw)
+		}
+	}
+}
+
+func TestClaimRealIPConfig(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{`{}`, true},
+		{`{"panel":{}}`, true},
+		{`{"panel":{"claim_trusted_proxies":["172.27.0.1/32"]}}`, true},
+		{`{"panel":{"claim_use_real_ip":null}}`, true},
+		{`{"panel":{"claim_use_real_ip":false}}`, false},
+		{`{"panel":{"claim_use_real_ip":true}}`, true},
+		{`{"panel":{"claim_use_real_ip":true,"claim_trusted_proxies":[]}}`, true},
+	} {
+		cfg, err := ParseConfig([]byte(tc.raw))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Panel.ClaimUseRealIP != tc.want {
+			t.Fatalf("claim_use_real_ip=%v want=%v for %s", cfg.Panel.ClaimUseRealIP, tc.want, tc.raw)
+		}
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := ParseConfig(raw)
+		if err != nil || again.Panel.ClaimUseRealIP != tc.want {
+			t.Fatalf("config round trip failed: %v", err)
+		}
+		found := false
+		for _, field := range restartRequiredFields(cfg) {
+			if field == "panel.claim_use_real_ip" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatal("proxy mode change must prompt for restart")
+		}
+	}
+	if _, err := ParseConfig([]byte(`{"panel":{"claim_use_real_ip":"true"}}`)); err == nil {
+		t.Fatal("non-boolean proxy mode accepted")
+	}
+}
+
+func TestSaveClaimRealIPConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"panel":{"claim_trusted_proxies":["172.27.0.1/32"],"custom":"keep"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	live := livecfg.New(livecfg.Snapshot{})
+	p := pool.New("")
+	up := upstream.New()
+	sch := scheduler.New(scheduler.Config{})
+	for _, enabled := range []bool{true, false} {
+		raw, err := json.Marshal(map[string]any{"panel": map[string]any{"claim_use_real_ip": enabled}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := saveConfig(raw, path, live, p, up, sch); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Panel.ClaimUseRealIP != enabled || len(cfg.Panel.ClaimTrustedProxies) != 1 || cfg.Panel.ClaimTrustedProxies[0] != "172.27.0.1/32" {
+			t.Fatalf("save lost the mode or existing CIDRs: %+v", cfg.Panel)
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(saved), `"custom": "keep"`) {
+			t.Fatal("saving proxy mode lost an unrelated setting")
 		}
 	}
 }

@@ -64,7 +64,7 @@ func OpenKeys(path string) (*KeyStore, error) {
 	if strings.HasPrefix(strings.TrimSpace(string(b)), "{") {
 		var disk keyFile
 		decodeErr = json.Unmarshal(b, &disk)
-		if decodeErr == nil && disk.Version != 2 {
+		if decodeErr == nil && disk.Version != 2 && disk.Version != 3 {
 			decodeErr = errors.New("unsupported distributed key file version")
 		}
 		s.keys, s.packets = disk.Keys, disk.Packets
@@ -286,9 +286,19 @@ func (s *KeyStore) save(keys []storedKey) error {
 }
 
 func (s *KeyStore) saveState(keys []storedKey, packets []storedPacket) error {
+	if keys == nil {
+		keys = []storedKey{}
+	}
 	var value any = keys
 	if len(packets) > 0 {
-		value = keyFile{Version: 2, Keys: keys, Packets: packets}
+		version := 2
+		for _, p := range packets {
+			if p.Allocation != nil {
+				version = 3 // Older binaries must not drop allocation counters on save.
+				break
+			}
+		}
+		value = keyFile{Version: version, Keys: keys, Packets: packets}
 	}
 	b, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func TestClaimRealIPConfigForm(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	script := `const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const src=fs.readFileSync('app.js','utf8'),html=fs.readFileSync('index.html','utf8');
+assert.match(html,/<input type="checkbox" name="claim_use_real_ip">/);
+const elements={claim_use_real_ip:{type:'checkbox',checked:false},claim_trusted_proxies:{type:'text',value:'',disabled:false}};
+const nodes={cfgForm:{elements},cfgPath:{},cfgNote:{}};
+let config={panel:{claim_use_real_ip:true}};
+const ctx={cfgLoaded:null,api:async()=>({config}),$:id=>nodes[id],markDurationFields(){},toast(message){throw Error(message);}};
+vm.createContext(ctx);vm.runInContext(src.slice(src.indexOf('const CFG_MAP ='),src.indexOf('/* Go 时长字段即时校验')),ctx);
+(async()=>{
+  await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,true);assert.equal(elements.claim_trusted_proxies.disabled,true);
+  let result=ctx.collectConfig();assert.equal(result.panel.claim_use_real_ip,true);assert.equal(JSON.stringify(result.panel.claim_trusted_proxies),'[]');
+  elements.claim_use_real_ip.checked=false;ctx.updateClaimProxyFields();assert.equal(elements.claim_trusted_proxies.disabled,false);
+  elements.claim_trusted_proxies.value='172.27.0.1/32, ::1/128';result=ctx.collectConfig();assert.equal(result.panel.claim_use_real_ip,false);assert.equal(JSON.stringify(result.panel.claim_trusted_proxies),'["172.27.0.1/32","::1/128"]');
+  config=result;await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,false);assert.equal(elements.claim_trusted_proxies.disabled,false);assert.equal(elements.claim_trusted_proxies.value,'172.27.0.1/32, ::1/128');
+  config={panel:{claim_trusted_proxies:['127.0.0.1/32']}};await ctx.loadConfig();assert.equal(elements.claim_use_real_ip.checked,true);assert.equal(elements.claim_trusted_proxies.disabled,true);assert.equal(elements.claim_trusted_proxies.value,'127.0.0.1/32');
+})().catch(err=>{console.error(err);process.exit(1)});`
+	file := filepath.Join(t.TempDir(), "claim-proxy-config.cjs")
+	if err := os.WriteFile(file, []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, file).CombinedOutput(); err != nil {
+		t.Fatalf("claim proxy config form: %v\n%s", err, out)
+	}
+}
+
 func TestPacketFrontendLifecycle(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -21,11 +51,11 @@ const ctx={location:{hash:'#accounts',origin:'http://test.local'},history:{repla
 ctx.window=ctx;vm.createContext(ctx);vm.runInContext(fs.readFileSync('app.js','utf8'),ctx);vm.runInContext(fs.readFileSync('packets.js','utf8'),ctx);
 let packets=Array.from({length:25},(_,i)=>({id:'p'+i,title:i===0?'<img src=x onerror=alert(1)>':'Packet '+i,kind:'tokens',mode:'equal',total:100,used:0,shares:2,claimed:0,remaining:2,created_at:'2026-11-05T00:00:00Z',expires_at:'2099-11-05T00:00:00Z',allowed_models:['cn:glm-5.2']}));
 let posts=0,failed=false;
-const detail=p=>({...p,claim_token:'a'.repeat(64),keys:Array.from({length:25},(_,i)=>({id:'k'+i,name:'Key '+i,prefix:'sk-wb-test',enabled:true,quota:{kind:'tokens',limit_units:50,used_units:10,claimed:true,pending:false,uncertain:i===0,expires_at:p.expires_at}}))});
+const detail=p=>({...p,claim_token:'a'.repeat(64),keys:p.keys||Array.from({length:25},(_,i)=>({id:'k'+i,name:'Key '+i,prefix:'sk-wb-test',enabled:true,quota:{kind:'tokens',limit_units:50,used_units:10,claimed:true,pending:false,uncertain:i===0,expires_at:p.expires_at}}))});
 ctx.fetch=async(url,opts)=>{const method=opts.method||'GET';let data={};
 if(failed)return {ok:false,status:500,json:async()=>({error:'write failed'})};
 if(url==='/panel/api/red-packets'&&method==='GET')data={available:true,admin_configured:true,packets};
-else if(url==='/panel/api/red-packets'&&method==='POST'){posts++;const input=JSON.parse(opts.body);assert.deepEqual(input.allowed_models,['cn:glm-5.2']);data=detail({...packets[0],id:'created',title:input.title});packets=[data,...packets];}
+else if(url==='/panel/api/red-packets'&&method==='POST'){posts++;const input=JSON.parse(opts.body);assert.deepEqual(input.allowed_models,['cn:glm-5.2']);data=detail({...packets[0],id:'created',title:input.title,keys:[]});packets=[data,...packets];}
 else if(url==='/panel/api/models')data={models:[{id:'cn:glm-5.2',name:'GLM'}]};
 else if(url.endsWith('/revoke'))packets=packets.map(p=>p.id==='p0'?{...p,revoked_at:'2026-11-05T01:00:00Z',remaining:0}:p);
 else if(url.endsWith('/reconcile')){const input=JSON.parse(opts.body);assert.equal(input.key_id,'k0');assert.equal(input.used,15);}
@@ -40,6 +70,9 @@ await run("loadPacketDetail('p0')");assert.equal(el('packetLink').value,'http://
 el('packetTitle').value='New';el('packetKind').value='tokens';el('packetMode').value='equal';el('packetAmount').value='100';el('packetShares').value='2';el('packetDays').value='7';
 await el('packetForm').onsubmit({preventDefault(){}});assert.equal(posts,0);assert.ok(el('packetCreateError').textContent.includes('至少选择'));
 run("setKeyModelValue('packet',['cn:glm-5.2'])");await el('packetForm').onsubmit({preventDefault(){}});assert.equal(posts,1);assert.equal(el('packetComposer').hidden,true);assert.equal(el('packetDetailTitle').textContent,'New');
+assert.equal(el('btnPacketExport').disabled,true);assert.ok(el('packetKeysBody').innerHTML.includes('暂无领取'));assert.ok(el('packetKeysBody').innerHTML.includes('领取时分配额度并生成 Key'));assert.ok(!el('packetKeysBody').innerHTML.includes('已全部删除'));
+const claimedKey=detail(packets.find(p=>p.id==='p0')).keys[0];packets=packets.map(p=>p.id==='created'?{...p,claimed:1,remaining:1,keys:[claimedKey]}:p);await run("loadPacketDetail('created',true)");assert.equal(el('btnPacketExport').disabled,false);assert.ok(el('packetKeysBody').innerHTML.includes('Key 0'));
+packets=packets.map(p=>p.id==='created'?{...p,keys:[]}:p);await run("loadPacketDetail('created',true)");assert.ok(el('packetKeysBody').innerHTML.includes('已领取的 Key 已全部删除'));assert.equal(el('btnPacketExport').disabled,true);
 await run("loadPacketDetail('p0')");await el('packetKeysBody').onclick({target:{closest:()=>({dataset:{packetKey:'k0',packetKeyAction:'reconcile'}})}});assert.equal(el('packetReconcile').hidden,false);el('packetReconcileUsed').value='15';await el('packetReconcileForm').onsubmit({preventDefault(){}});assert.equal(el('packetReconcile').hidden,true);
 await run("revokePacket('p0')");assert.ok(el('packetsBody').innerHTML.includes('已收回')||run("redPackets.find(p=>p.id==='p0').revoked_at"));
 el('packetSecret').value='sk-wb-private';el('packetSecretBox').hidden=false;run("go('accounts')");assert.equal(el('packetSecret').value,'');assert.equal(el('packetSecretBox').hidden,true);

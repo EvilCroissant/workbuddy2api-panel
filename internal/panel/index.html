@@ -1150,7 +1150,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="box" id="packetDetail" hidden>
         <header><h3 id="packetDetailTitle">红包详情</h3><span class="grow"></span><button class="xs ghost" id="btnPacketDetailClose">关闭</button></header>
         <div class="pad"><p class="hint" id="packetDetailMeta"></p><label class="fld"><span class="lb">领取链接</span><input id="packetLink" readonly autocomplete="off"></label><div class="packet-detail-actions"><button id="btnPacketLinkCopy">复制领取链接</button><button id="btnPacketExport">导出密钥</button><button class="ghost danger" id="btnPacketRevoke">收回红包</button></div>
-        <p class="hint packet-policy">未领取的 Key 暂不生效；收回会删除该批全部 Key，历史已用额度保留。</p></div>
+        <p class="hint packet-policy">领取时分配额度并生成 Key；收回会删除该红包关联的全部 Key，历史已用额度保留。</p></div>
         <div class="tbl-wrap"><table class="acc zebra"><thead><tr><th>密钥</th><th>状态</th><th>额度</th><th>已用</th><th>剩余</th><th>操作</th></tr></thead><tbody id="packetKeysBody"></tbody></table></div>
         <div class="list-pager" role="group" aria-label="红包密钥分页"><span class="page-info" id="packetKeysPageInfo"></span><label>每页 <select id="packetKeysPageSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label><button class="xs" id="packetKeysPrev">上一页</button><span id="packetKeysPageNumber">1 / 1</span><button class="xs" id="packetKeysNext">下一页</button></div>
         <div class="pad" id="packetReconcile" hidden><form id="packetReconcileForm"><label class="fld"><span class="lb" id="packetReconcileLabel">核对后的累计已用额度</span><input id="packetReconcileUsed" type="number" min="0" step="0.000001" required></label><p class="hint">核对上游扣费后填写累计用量，保存后解除暂停。</p><div class="packet-detail-actions"><button type="submit" class="primary" id="btnPacketReconcileSave">保存核对结果</button><button type="button" id="btnPacketReconcileCancel">取消</button></div></form></div>
@@ -1176,9 +1176,12 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <label class="fld"><span class="lb">单账号明细默认展示条数</span>
               <input name="package_detail_limit" type="number" min="1" placeholder="5">
               <span class="hint">积分构成页按最早到期展示，其余未用完包聚合</span></label>
+            <label class="fld"><span class="switch"><span class="lb">红包领取通过反向代理获取真实 IP</span>
+              <input type="checkbox" name="claim_use_real_ip"></span>
+              <span class="hint">默认开启，直接读取反代覆盖的 X-Real-IP，无需填写 CIDR；适用于后端仅经受控反代访问的部署。缺失或格式错误时停止领取。修改需重启。</span></label>
             <label class="fld"><span class="lb">红包领取可信代理（CIDR）</span>
               <input name="claim_trusted_proxies" placeholder="例如：127.0.0.1/32, 172.19.0.2/32">
-              <span class="hint">经反向代理领取时，填网关看到的代理 IP 网段，以识别真实客户端 IP；逗号分隔，留空使用直连 IP。需重启。</span></label>
+              <span class="hint">关闭上方开关时生效。填网关看到的代理 IP 网段，逗号分隔；留空使用直连 IP。需重启。</span></label>
           </div>
         </div>
 

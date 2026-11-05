@@ -26,9 +26,18 @@ func packetInput() PacketInput {
 func TestPacketDistributionAndValidation(t *testing.T) {
 	for _, mode := range []string{"random", "equal"} {
 		for n := 1; n < 100; n++ {
-			amounts, err := packetAmounts(int64(n*11+3), n, mode)
-			if err != nil {
-				t.Fatal(err)
+			remaining := int64(n*11 + 3)
+			amounts := make([]int64, n)
+			for i := range amounts {
+				amount, err := packetAmount(remaining, n-i, mode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if amount > remaining-int64(n-i-1) || (mode == "random" && n-i > 1 && amount > 2*(remaining/int64(n-i))) {
+					t.Fatalf("invalid draw: remaining=%d shares=%d amount=%d", remaining, n-i, amount)
+				}
+				amounts[i] = amount
+				remaining -= amount
 			}
 			var sum, min, max int64
 			min = 1 << 60
@@ -83,15 +92,8 @@ func TestPacketLifecyclePersistenceAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var total int64
-	for _, k := range exported {
-		total += k.Key.Quota.Limit
-		if VerifyAPI(req("Bearer "+k.Secret), "admin", s) {
-			t.Fatal("unclaimed key active")
-		}
-	}
-	if total != 10000001 {
-		t.Fatalf("lost fractional credits %d", total)
+	if len(exported) != 0 || len(p.Keys) != 0 || len(s.List()) != 1 || p.Remaining != 3 {
+		t.Fatal("creation allocated unclaimed keys")
 	}
 	claim, err := s.ClaimPacket(p.ClaimToken, "203.0.113.1")
 	if err != nil {
@@ -111,7 +113,7 @@ func TestPacketLifecyclePersistenceAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"version": 2`) || strings.Contains(string(raw), claim.Secret) || strings.Contains(string(raw), p.ClaimToken) || strings.Contains(string(raw), "203.0.113.1") {
+	if !strings.Contains(string(raw), `"version": 3`) || strings.Contains(string(raw), claim.Secret) || strings.Contains(string(raw), p.ClaimToken) || strings.Contains(string(raw), "203.0.113.1") {
 		t.Fatal("bad disk format or leaked secret/IP")
 	}
 	s, err = OpenKeys(path)
@@ -124,6 +126,10 @@ func TestPacketLifecyclePersistenceAndIsolation(t *testing.T) {
 	reloaded, err := s.Packet(p.ID)
 	if err != nil || reloaded.ClaimToken != p.ClaimToken || reloaded.Claimed != 1 || reloaded.Remaining != 2 {
 		t.Fatalf("reload %+v %v", reloaded, err)
+	}
+	again, err = s.ClaimPacket(p.ClaimToken, "203.0.113.1")
+	if err != nil || !again.Repeated || again.Secret != claim.Secret || again.Key.Quota.Limit != claim.Key.Quota.Limit {
+		t.Fatalf("restart changed existing claim: %+v %v", again, err)
 	}
 	lease, err := s.BeginQuota(claim.Key.ID)
 	if err != nil {
@@ -207,6 +213,17 @@ func TestConcurrentPacketClaims(t *testing.T) {
 	got, _ := s.PublicPacket(p.ClaimToken)
 	if got.Claimed != 10 || got.Remaining != 0 {
 		t.Fatalf("claims %+v", got)
+	}
+	exported, err := s.ExportPacket(p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	for _, c := range exported {
+		total += c.Key.Quota.Limit
+	}
+	if len(exported) != 10 || total != 1000 {
+		t.Fatalf("concurrent claims oversubscribed allocation: keys=%d total=%d", len(exported), total)
 	}
 }
 func TestQuotaEnforcementAndRecovery(t *testing.T) {
@@ -537,15 +554,8 @@ func TestPacketThousandShares(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Keys) != 1000 || p.Remaining != 1000 {
-		t.Fatalf("incomplete batch keys=%d remaining=%d", len(p.Keys), p.Remaining)
-	}
-	var units int64
-	for _, k := range p.Keys {
-		units += k.Quota.Limit
-	}
-	if units != 1000000 {
-		t.Fatalf("wrong total %d", units)
+	if len(p.Keys) != 0 || p.Remaining != 1000 {
+		t.Fatalf("unexpected preallocation keys=%d remaining=%d", len(p.Keys), p.Remaining)
 	}
 	c, err := s.ClaimPacket(p.ClaimToken, "ip")
 	if err != nil {
@@ -561,7 +571,7 @@ func TestPacketThousandShares(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := s.Packet(p.ID)
-	if after.Used != 42 || after.Remaining != 999 {
+	if after.Used != 42 || after.Remaining != 999 || len(after.Keys) != 1 {
 		t.Fatalf("incorrect large batch accounting %+v", after.PacketInfo)
 	}
 }

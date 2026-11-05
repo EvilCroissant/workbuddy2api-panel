@@ -41,6 +41,7 @@ type Config struct {
 	AuthDir             string               // OAuth 登录完成后凭证落盘目录
 	APIKey              string               // 空 = 不鉴权（与主服务同语义）；与 Live 同时给出时 Live 优先
 	Keys                *httpauth.KeyStore   // 分发 Key 只用于 /v1/*，面板始终使用管理员 APIKey
+	ClaimUseRealIP      bool                 // Read the proxy's X-Real-IP directly; backend access must be restricted to controlled proxies.
 	ClaimTrustedProxies []string             // CIDRs whose forwarding headers may identify packet claimants
 	RedisMode           string               // "upstash" / "noop"，仅观测透出
 	Version             string               // 面板版本号（展示用）

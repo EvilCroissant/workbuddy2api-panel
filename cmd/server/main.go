@@ -319,6 +319,7 @@ func main() {
 		AuthDir:             cfg.AuthDir,
 		APIKey:              cfg.APIKey,
 		Keys:                apiKeys,
+		ClaimUseRealIP:      cfg.Panel.ClaimUseRealIP,
 		ClaimTrustedProxies: cfg.Panel.ClaimTrustedProxies,
 		RedisMode:           redisMode,
 		StickyCount:         sessCount,
@@ -607,7 +608,7 @@ func restartRequiredFields(c *Config) []string {
 	out = append(out, "upstream.user_agent")
 	// cn.chat_base 同样只在装配期写进 up.ChatBaseCN（请求路径并发读取，不做热改）。
 	out = append(out, "cn.chat_base")
-	out = append(out, "panel.claim_trusted_proxies")
+	out = append(out, "panel.claim_use_real_ip", "panel.claim_trusted_proxies")
 	if c.Upstash.URL != "" || c.Upstash.Token != "" {
 		out = append(out, "upstash")
 	}

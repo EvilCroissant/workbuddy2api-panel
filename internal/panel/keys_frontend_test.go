@@ -93,8 +93,8 @@ const keyRow = id => {
   el('keyCreateModelList').onchange({target:{closest:()=>({dataset:{keyModelId:'cn:glm-5.2'},checked:true})}});
   el('keyCreateModelList').onchange({target:{closest:()=>({dataset:{keyModelId:'global:other'},checked:true})}});
   assert.equal(el('keyAllowedModels').value,'cn:glm-5.2\nglobal:other');
-  assert.ok(el('keyCreateModelList').innerHTML.includes('is-cn'));
-  assert.ok(el('keyCreateModelList').innerHTML.includes('is-global'));
+  assert.ok(el('keyCreateModelList').innerHTML.includes('class="acc md key-model-table"'));
+  assert.ok(el('keyCreateModelList').innerHTML.includes('data-key-model-id="global:other" aria-label="选择 global:other" checked'));
   el('keyCreateModelSearch').value='other';el('keyCreateModelSearch').oninput();
   assert.ok(el('keyCreateModelList').innerHTML.includes('global:other'));
   assert.ok(!el('keyCreateModelList').innerHTML.includes('cn:glm-5.2'));

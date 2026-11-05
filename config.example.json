@@ -9,6 +9,7 @@
   },
   "panel": {
     "package_detail_limit": 5,
+    "claim_use_real_ip": true,
     "claim_trusted_proxies": []
   },
   "logging": {

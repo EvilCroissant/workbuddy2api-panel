@@ -65,7 +65,7 @@ function renderPackets() {
       '<td class="num">' + esc(fmtLocalDateTime(parseAPITime(p.expires_at))) + '</td>' +
       '<td class="acts"><button class="xs ghost" data-packet-id="' + esc(p.id) + '" data-packet-action="detail">详情 / 领取链接</button>' +
       (!p.revoked_at ? '<button class="xs ghost danger" data-packet-id="' + esc(p.id) + '" data-packet-action="revoke">收回</button>' : '') + '</td></tr>';
-  }).join('') : '<tr><td colspan="6"><div class="empty"><div class="big">' + (redPackets.length ? '没有匹配的红包' : '还没有红包') + '</div>' + (redPackets.length ? '试试其他关键词或状态。' : '点击「发红包」，生成带额度的 Key 和领取链接。') + '</div></td></tr>';
+  }).join('') : '<tr><td colspan="6"><div class="empty"><div class="big">' + (redPackets.length ? '没有匹配的红包' : '还没有红包') + '</div>' + (redPackets.length ? '试试其他关键词或状态。' : '点击「发红包」创建领取链接，领取时分配额度并生成 Key。') + '</div></td></tr>';
 }
 async function loadPacketDetail(id, quiet = false) {
   const seq = ++packetDetailSeq;
@@ -85,6 +85,7 @@ function renderPacketDetail() {
   $('packetLink').value = packetClaimLink(p);
   $('btnPacketRevoke').disabled = !!p.revoked_at;
   $('btnPacketExport').disabled = !p.keys.length;
+  const emptyText = p.revoked_at ? '红包已收回，关联 Key 已删除。' : Number(p.claimed) > 0 ? '已领取的 Key 已全部删除。' : packetStatus(p) === 'active' ? '暂无领取，领取时分配额度并生成 Key。' : '尚未有人领取，红包已结束。';
   const keys = pageItems(p.keys || [], packetKeysState, 'packetKeys', (p.keys || []).length, '密钥');
   $('packetKeysBody').innerHTML = keys.length ? keys.map(k => {
     const q = k.quota, label = packetKeyState(k);
@@ -94,7 +95,7 @@ function renderPacketDetail() {
       '<td class="num">' + esc(packetNumber(Math.max(0,packetAmount(q.limit_units-q.used_units,q.kind)))) + '</td>' +
       '<td class="acts"><button class="xs ghost" data-packet-key="' + esc(k.id) + '" data-packet-key-action="reveal">查看 Key</button>' +
       (q.uncertain ? '<button class="xs ghost" data-packet-key="' + esc(k.id) + '" data-packet-key-action="reconcile">核对用量</button>' : '') + '</td></tr>';
-  }).join('') : '<tr><td colspan="6"><div class="empty">此批密钥已全部删除。</div></td></tr>';
+  }).join('') : '<tr><td colspan="6"><div class="empty">' + emptyText + '</div></td></tr>';
 }
 function updatePacketPreview() {
   const kind = $('packetKind').value, tokens = kind === 'tokens';

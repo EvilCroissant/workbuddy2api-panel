@@ -67,6 +67,14 @@ type storedPacket struct {
 	EncryptedToken string            `json:"encrypted_token"`
 	Claims         map[string]string `json:"claims"` // salted IP digest -> public key ID
 	UsedUnits      int64             `json:"used_units"`
+	Allocation     *packetAllocation `json:"allocation,omitempty"`
+}
+
+// Allocation is absent for legacy packets whose keys were created in advance.
+// Assigned quota never returns to the pool, even if a claimed key is deleted.
+type packetAllocation struct {
+	TotalUnits    int64 `json:"total_units"`
+	AssignedUnits int64 `json:"assigned_units"`
 }
 type keyFile struct {
 	Version int            `json:"version"`
@@ -105,6 +113,14 @@ func (s *KeyStore) validatePackets() error {
 		if p.ID == "" || seen[p.ID] || len(p.TokenHash) != 64 || p.Shares < 1 || p.Shares > 1000 || p.Claims == nil || p.UsedUnits < 0 {
 			return errors.New("invalid red packet record")
 		}
+		if a := p.Allocation; a != nil {
+			remaining := int64(p.Shares - len(p.Claims))
+			if (p.Kind != "credit" && p.Kind != "tokens") || (p.Mode != "equal" && p.Mode != "random") || math.IsNaN(p.Total) || math.IsInf(p.Total, 0) || p.Total <= 0 || p.Total > 1e9 || p.ExpiresAt.IsZero() ||
+				a.TotalUnits != int64(math.Round(p.Total*float64(packetScale(p.Kind)))) || a.TotalUnits < int64(p.Shares) || a.AssignedUnits < int64(len(p.Claims)) || a.AssignedUnits > a.TotalUnits || remaining < 0 ||
+				(len(p.Claims) == 0 && a.AssignedUnits != 0) || (remaining == 0 && a.AssignedUnits != a.TotalUnits) || a.TotalUnits-a.AssignedUnits < remaining {
+				return errors.New("invalid red packet allocation")
+			}
+		}
 		seen[p.ID] = true
 		// Tokens use the same authenticated encryption as ordinary key secrets.
 		token, err := s.decryptSecret(storedKey{KeyInfo: KeyInfo{ID: p.ID}, Hash: p.TokenHash, EncryptedSecret: p.EncryptedToken})
@@ -134,29 +150,26 @@ func cloneKeys(in []storedKey) []storedKey {
 	}
 	return out
 }
-func packetAmounts(total int64, count int, mode string) ([]int64, error) {
-	amounts := make([]int64, count)
-	remaining := total
-	for i := range amounts {
-		n := int64(count - i)
-		amount := remaining / n
-		if n == 1 {
-			amount = remaining
-		} else if mode == "random" {
-			upper := 2 * (remaining / n)
-			if max := remaining - (n - 1); upper > max {
-				upper = max
-			}
-			value, err := rand.Int(rand.Reader, big.NewInt(upper))
-			if err != nil {
-				return nil, err
-			}
-			amount = 1 + value.Int64()
-		}
-		amounts[i] = amount
-		remaining -= amount
+func packetAmount(remaining int64, count int, mode string) (int64, error) {
+	if count < 1 || remaining < int64(count) {
+		return 0, ErrPacketClosed
 	}
-	return amounts, nil
+	n := int64(count)
+	if n == 1 {
+		return remaining, nil
+	}
+	if mode != "random" {
+		return remaining / n, nil
+	}
+	upper := 2 * (remaining / n)
+	if max := remaining - (n - 1); upper > max {
+		upper = max
+	}
+	value, err := rand.Int(rand.Reader, big.NewInt(upper))
+	if err != nil {
+		return 0, err
+	}
+	return 1 + value.Int64(), nil
 }
 func (s *KeyStore) CreatePacket(in PacketInput) (PacketDetail, error) {
 	in.Title = strings.TrimSpace(in.Title)
@@ -178,10 +191,6 @@ func (s *KeyStore) CreatePacket(in PacketInput) (PacketDetail, error) {
 	if in.Kind == "tokens" && len(models) == 0 {
 		return PacketDetail{}, ErrPacketModels
 	}
-	amounts, err := packetAmounts(units, in.Shares, in.Mode)
-	if err != nil {
-		return PacketDetail{}, err
-	}
 	id, err := randomHex(12)
 	if err != nil {
 		return PacketDetail{}, err
@@ -198,23 +207,8 @@ func (s *KeyStore) CreatePacket(in PacketInput) (PacketDetail, error) {
 	}
 	hash := sha256.Sum256([]byte(token))
 	now := time.Now().UTC()
-	p := storedPacket{PacketInfo: PacketInfo{ID: id, Title: in.Title, Kind: in.Kind, Mode: in.Mode, Total: in.Total, Shares: in.Shares, Remaining: in.Shares, CreatedAt: now, ExpiresAt: now.Add(time.Duration(in.Days) * 24 * time.Hour), AllowedModels: models}, TokenHash: hex.EncodeToString(hash[:]), EncryptedToken: sealed, Claims: map[string]string{}}
+	p := storedPacket{PacketInfo: PacketInfo{ID: id, Title: in.Title, Kind: in.Kind, Mode: in.Mode, Total: in.Total, Shares: in.Shares, Remaining: in.Shares, CreatedAt: now, ExpiresAt: now.Add(time.Duration(in.Days) * 24 * time.Hour), AllowedModels: models}, TokenHash: hex.EncodeToString(hash[:]), EncryptedToken: sealed, Claims: map[string]string{}, Allocation: &packetAllocation{TotalUnits: units}}
 	keys := cloneKeys(s.keys)
-	for i, amount := range amounts {
-		random, err := randomHex(44)
-		if err != nil {
-			return PacketDetail{}, err
-		}
-		secret := "sk-wb-" + random[:64]
-		keyID := random[64:]
-		digest := sha256.Sum256([]byte(secret))
-		enc, err := s.encryptSecret(keyID, secret)
-		if err != nil {
-			return PacketDetail{}, err
-		}
-		info := KeyInfo{ID: keyID, Name: fmt.Sprintf("%.60s · %d", in.Title, i+1), Prefix: secret[:14], Enabled: true, CreatedAt: now, AllowedModels: models, SecretAvailable: true, Quota: &KeyQuota{PacketID: id, Kind: in.Kind, Limit: amount, ExpiresAt: p.ExpiresAt}}
-		keys = append(keys, storedKey{KeyInfo: info, Hash: hex.EncodeToString(digest[:]), EncryptedSecret: enc})
-	}
 	packets := append(append([]storedPacket{}, s.packets...), p)
 	if err := s.saveState(keys, packets); err != nil {
 		return PacketDetail{}, err
@@ -228,6 +222,10 @@ func (s *KeyStore) packetInfoLocked(p storedPacket) PacketInfo {
 	info.Remaining = 0
 	info.Used = float64(p.UsedUnits) / float64(packetScale(p.Kind))
 	if p.RevokedAt == nil && time.Now().Before(p.ExpiresAt) {
+		if p.Allocation != nil {
+			info.Remaining = p.Shares - len(p.Claims)
+			return info
+		}
 		for _, k := range s.keys {
 			if k.Quota != nil && k.Quota.PacketID == p.ID && !k.Quota.Claimed && k.Enabled {
 				info.Remaining++
@@ -333,47 +331,94 @@ func (s *KeyStore) ClaimPacket(token, ip string) (PacketClaim, error) {
 			return PacketClaim{}, ErrPacketClosed
 		}
 		identity := tokenDigest(p.TokenHash + ":" + ip)
-		existing := p.Claims[identity]
-		keys := cloneKeys(s.keys)
-		for i := range keys {
-			k := &keys[i]
-			if k.Quota == nil || k.Quota.PacketID != p.ID || !k.Enabled {
-				continue
-			}
-			if existing != "" {
-				if k.ID != existing {
-					continue
+		if existing := p.Claims[identity]; existing != "" {
+			for _, k := range s.keys {
+				if k.ID == existing && k.Enabled && k.Quota != nil && k.Quota.PacketID == p.ID {
+					secret, err := s.decryptSecret(k)
+					if err != nil {
+						return PacketClaim{}, err
+					}
+					return packetClaimResult(k, secret, true), nil
 				}
-			} else if k.Quota.Claimed {
-				continue
 			}
-			secret, err := s.decryptSecret(*k)
+			// Deletion or disabling must not let the same identity draw again.
+			return PacketClaim{}, ErrPacketClosed
+		}
+
+		keys := cloneKeys(s.keys)
+		var key storedKey
+		var secret string
+		if p.Allocation != nil {
+			a := *p.Allocation
+			amount, err := packetAmount(a.TotalUnits-a.AssignedUnits, p.Shares-len(p.Claims), p.Mode)
 			if err != nil {
 				return PacketClaim{}, err
 			}
-			if existing == "" {
-				k.Quota.Claimed = true
-				claims := map[string]string{}
-				for a, b := range p.Claims {
-					claims[a] = b
+			key, secret, err = s.newPacketKeyLocked(p, amount)
+			if err != nil {
+				return PacketClaim{}, err
+			}
+			a.AssignedUnits += amount
+			p.Allocation = &a
+			keys = append(keys, key)
+		} else {
+			// Existing packets keep their preallocated keys and amounts.
+			for i := range keys {
+				k := &keys[i]
+				if k.Quota == nil || k.Quota.PacketID != p.ID || !k.Enabled || k.Quota.Claimed {
+					continue
 				}
-				claims[identity] = k.ID
-				p.Claims = claims
-				packets := append([]storedPacket{}, s.packets...)
-				packets[pi] = p
-				if err := s.saveState(keys, packets); err != nil {
+				var err error
+				secret, err = s.decryptSecret(*k)
+				if err != nil {
 					return PacketClaim{}, err
 				}
+				k.Quota.Claimed = true
+				key = *k
+				break
 			}
-			info := k.KeyInfo
-			quota := *info.Quota
-			info.Quota = &quota
-			info.AllowedModels = append([]string(nil), info.AllowedModels...)
-			return PacketClaim{Key: info, Secret: secret, Repeated: existing != ""}, nil
+			if key.ID == "" {
+				return PacketClaim{}, ErrPacketClosed
+			}
 		}
-		return PacketClaim{}, ErrPacketClosed
+		claims := make(map[string]string, len(p.Claims)+1)
+		for a, b := range p.Claims {
+			claims[a] = b
+		}
+		claims[identity] = key.ID
+		p.Claims = claims
+		packets := append([]storedPacket{}, s.packets...)
+		packets[pi] = p
+		if err := s.saveState(keys, packets); err != nil {
+			return PacketClaim{}, err
+		}
+		return packetClaimResult(key, secret, false), nil
 	}
 	return PacketClaim{}, ErrPacketNotFound
+}
+
+func (s *KeyStore) newPacketKeyLocked(p storedPacket, amount int64) (storedKey, string, error) {
+	random, err := randomHex(44)
+	if err != nil {
+		return storedKey{}, "", err
+	}
+	secret, id := "sk-wb-"+random[:64], random[64:]
+	encrypted, err := s.encryptSecret(id, secret)
+	if err != nil {
+		return storedKey{}, "", err
+	}
+	info := KeyInfo{ID: id, Name: fmt.Sprintf("%.60s · %d", p.Title, len(p.Claims)+1),
+		Prefix: secret[:14], Enabled: true, CreatedAt: time.Now().UTC(), AllowedModels: append([]string(nil), p.AllowedModels...), SecretAvailable: true,
+		Quota: &KeyQuota{PacketID: p.ID, Kind: p.Kind, Limit: amount, ExpiresAt: p.ExpiresAt, Claimed: true}}
+	return storedKey{KeyInfo: info, Hash: tokenDigest(secret), EncryptedSecret: encrypted}, secret, nil
+}
+
+func packetClaimResult(k storedKey, secret string, repeated bool) PacketClaim {
+	info := k.KeyInfo
+	quota := *info.Quota
+	info.Quota = &quota
+	info.AllowedModels = append([]string(nil), info.AllowedModels...)
+	return PacketClaim{Key: info, Secret: secret, Repeated: repeated}
 }
 
 // QuotaLease tracks one request's usage. Concurrent requests settle independently
