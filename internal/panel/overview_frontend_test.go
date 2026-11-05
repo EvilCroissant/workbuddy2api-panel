@@ -244,6 +244,56 @@ const load = () => vm.runInContext('loadOverview(true)', sandbox);
   assert.equal(el('sCredits').title, '0');
   assert.ok(el('accBody').innerHTML.includes('账号池是空的'));
   assert.ok(el('mlBody').innerHTML.includes('当前没有模型级限流'));
+  assert.equal(el('btnRemoveDisabled').disabled, true);
+
+  // 删除覆盖全池，取消不写入，重复点击及后台轮询不会重入。
+  response = { ...overview, disabled: 1183 };
+  await load();
+  set('accSearch', 'not-present');
+  assert.equal(el('btnRemoveDisabled').disabled, false, 'filters do not hide disabled accounts from bulk removal');
+  let confirmation = '', confirmed = false;
+  sandbox.confirm = text => { confirmation = text; return confirmed; };
+  const beforeCancel = requests;
+  await el('btnRemoveDisabled').onclick();
+  assert.equal(requests, beforeCancel, 'cancel must not issue a request');
+  assert.ok(confirmation.includes('1183'));
+  assert.ok(confirmation.includes('不受筛选和分页影响'));
+  confirmed = true;
+  let finishDelete, deleteCalls = 0;
+  const notices = [];
+  sandbox.toast = (text, kind) => notices.push({ text, kind });
+  sandbox.fetch = async (url, opts) => {
+    if (url === '/panel/api/accounts/remove_disabled') {
+      assert.equal(opts.method, 'POST');
+      deleteCalls++;
+      return new Promise(resolve => { finishDelete = body => resolve({ ok: true, status: 200, json: async () => body }); });
+    }
+    return { ok: true, status: 200, json: async () => response };
+  };
+  const deleting = el('btnRemoveDisabled').onclick();
+  assert.equal(el('btnRemoveDisabled').disabled, true);
+  assert.equal(el('btnRemoveDisabled').textContent, '删除中…');
+  await el('btnRemoveDisabled').onclick();
+  await load();
+  assert.equal(el('btnRemoveDisabled').disabled, true, 'polling must not re-enable an active deletion');
+  assert.equal(deleteCalls, 1, 'one bulk request rather than one request per account');
+  response = { ...overview, total: 1, disabled: 0, accounts: [accounts[0]] };
+  finishDelete({ removed: 1183, failed: 0, errors: [] });
+  await deleting;
+  assert.equal(el('sDisabled').textContent, 0);
+  assert.equal(el('btnRemoveDisabled').disabled, true);
+  assert.equal(el('btnRemoveDisabled').textContent, '删除已禁用');
+  assert.ok(notices[0].text.includes('1183'));
+
+  response = { ...response, disabled: 1 };
+  await load();
+  const partial = el('btnRemoveDisabled').onclick();
+  finishDelete({ removed: 0, failed: 1, errors: [{ uid: 'failed', error: 'permission denied' }] });
+  await partial;
+  assert.equal(el('btnRemoveDisabled').disabled, false, 'failed accounts can be retried');
+  assert.ok(notices[1].text.includes('已保留'));
+  assert.ok(notices[1].text.includes('permission denied'));
+  assert.equal(notices[1].kind, 'err');
   console.log('OVERVIEW OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });`
 	path := filepath.Join(t.TempDir(), "overview.cjs")

@@ -202,6 +202,7 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    在 header 里会把标题挤成两行、把"近 3 天"这类短选项拉成一整条。 */
 .box > header select, .box > header input { width: auto; }
 .box > header h3 { white-space: nowrap; }
+#accountPoolBox > header { flex-wrap: wrap; }
 .box .pad { padding: 17px; }
 .list-tools, .list-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .list-tools { padding: 12px 17px; border-bottom: 1px solid var(--line-soft); }
@@ -753,7 +754,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
       </div>
 
-      <div class="box">
+      <div class="box" id="accountPoolBox">
         <header>
           <h3>账号池</h3>
           <span class="grow"></span>
@@ -763,6 +764,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <button class="xs" id="btnTravelAll">旅行巡检</button>
           <button class="xs" id="btnActivityAll">活跃上报</button>
           <button class="xs" id="btnKeepaliveAll">全部保活</button>
+          <button class="xs ghost danger" id="btnRemoveDisabled" disabled>删除已禁用</button>
         </header>
         <div class="list-tools" role="group" aria-label="账号池筛选">
           <input id="accSearch" type="search" placeholder="搜索昵称、UID 或备注" aria-label="搜索账号池">

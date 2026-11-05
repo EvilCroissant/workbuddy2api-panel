@@ -672,6 +672,8 @@ http://127.0.0.1:7863/panel/
 
 账号池默认每页 20 个，积分到期提醒默认每页 10 个，均可切换为每页 10 / 20 / 50 个。两块列表独立翻页，支持按昵称、UID、备注搜索和国内 / 国际筛选；账号池可按状态筛选，到期提醒可只看 3 / 7 天内到期、无到期信息或查询失败的账号。先对全量数据筛选及排序再分页，自动刷新保留当前页，账号减少时自动回到有效页。顶部统计和「全部签到」等批量操作仍覆盖完整账号池，翻页与筛选不新增上游请求。
 
+账号池工具栏的「删除已禁用」会在确认后一次性删除全池已禁用账号及其凭证文件，不受搜索、地区筛选或分页影响；可用、冷却中和暂停选号的账号会保留。凭证文件删除失败的账号仍留在池中并显示失败原因。没有已禁用账号时按钮不可点击。
+
 分发 Key：用管理员 Key 登录 → 打开「API 密钥」→ 填写使用人 / 用途和允许的模型 → 生成 Key。客户端 Base URL 仍为本网关的 `/v1`，API Key 填新生成的 `sk-wb-...`。创建后可点击列表中的「查看」再次查看和复制完整 Key；旧版仅存摘要的 Key 显示「重新生成」，重新生成后旧 Key 立即失效，Key ID、模型权限和用量历史保留。停用 / 删除在下一次请求生效，已开始的请求继续；更换管理员 Key 不影响其他分发 Key。所有 Key 共用账号池；密钥页可按近 24 小时 / 7 天 / 30 天 / 累计查看各 Key 的请求数、成功率、输入 / 输出 / 总 Token、实测积分和最近调用，点击「用量」查看模型分布、趋势及最近 20 条请求。当前未引入每 Key 独立额度或限速。
 
 模型权限：创建时可从目录添加模型，或按行 / 逗号填写模型 ID；之后点击「模型权限」随时修改。留空允许全部模型，裸名归一化为 `cn:`；`cn:glm-5.2` 和 `global:glm-5.2` 分开授权。`/v1/models` 只列出该 Key 获准的模型，直接调用未授权模型返回 HTTP 403 `model_not_allowed`；开启跨域回退时也只会回退到获准的区域。管理员不受分发 Key 的模型白名单限制，搜索工具独立可用。
@@ -712,7 +714,7 @@ http://127.0.0.1:7863/panel/
 | 分组 | 端点 |
 |---|---|
 | 只读 | `GET overview` · `GET usage`（`hours` 或 `from`/`to`）· `GET packages` · `GET models` · `GET model_probes` · `GET logs` · `GET request_metrics` · `GET request_logs`（`limit` / `outcome` / `account` / `model` / `client_ip` / `user_agent` / `from` / `to`）· `GET config` · `GET tasks/queue` · `GET school/vouchers` |
-| 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `disable` · `remove`；`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all` |
+| 账号运维 | `POST accounts/{uid}/checkin` · `balance` · `revive` · `disable` · `remove`；`POST accounts/remove_disabled`（批量删除禁用账号，返回 `removed` / `failed` / `errors`）；`POST checkin_all` · `travel_all` · `activity_all` · `keepalive_all` · `balance_all` |
 | 任务 | `GET accounts/{uid}/tasks`；`POST accounts/{uid}/tasks/accept` · `accept_all` · `claim` · `auto` · `auto_all`；`POST tasks/scan_all` · `tasks/run_queue` |
 | 添加账号 | `POST login/start` · `GET login/poll` · `GET login/regions` · `POST import/cockpit` |
 | 写入 | `POST config`（校验 → 落盘 → 热应用，返回需重启字段清单）· `POST usage/save`（立即把内存用量落盘） |

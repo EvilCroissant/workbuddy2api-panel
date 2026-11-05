@@ -170,6 +170,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/login/poll", p.withAuth(p.loginPoll))
 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
 	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importCockpit))
+	p.mux.HandleFunc("POST /panel/api/accounts/remove_disabled", p.withAuth(p.accountsRemoveDisabled))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
@@ -711,10 +712,8 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fileMsg := ""
-	if a.FilePath != "" {
-		if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
-			fileMsg = err.Error()
-		}
+	if err := a.RemoveFile(); err != nil {
+		fileMsg = err.Error()
 	}
 	if fileMsg != "" {
 		log.Printf("panel: remove uid=%s（auth 文件删除失败: %s）", uid, fileMsg)
@@ -723,6 +722,26 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("panel: remove uid=%s（已出池并删除凭证文件）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// accountsRemoveDisabled 用一次请求删除全池禁用账号，不受前端筛选及分页影响。
+func (p *Panel) accountsRemoveDisabled(w http.ResponseWriter, r *http.Request) {
+	removed, failed := p.cfg.Pool.RemoveDisabled()
+	uids := make([]string, 0, len(failed))
+	for uid := range failed {
+		uids = append(uids, uid)
+	}
+	sort.Strings(uids)
+	errors := make([]map[string]string, 0, len(failed))
+	for _, uid := range uids {
+		message := failed[uid].Error()
+		errors = append(errors, map[string]string{"uid": uid, "error": message})
+		log.Printf("panel: remove disabled uid=%s（凭证文件删除失败，账号保留: %s）", uid, message)
+	}
+	log.Printf("panel: remove disabled accounts removed=%d failed=%d", removed, len(failed))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": len(failed) == 0, "removed": removed, "failed": len(failed), "errors": errors,
+	})
 }
 
 // ---------------------------------------------------------------------------

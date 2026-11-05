@@ -400,6 +400,32 @@ func (p *Pool) Remove(uid string) *auth.Auth {
 	return e.a
 }
 
+// RemoveDisabled 删除当前全部禁用账号及凭证，批次结束时只持久化一次池状态。
+// 状态判断与移除在同一把锁内，避免误删已被复活的账号；凭证删除失败则保留原条目。
+func (p *Pool) RemoveDisabled() (removed int, failed map[string]error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for uid, e := range p.byUID {
+		if !e.disabled {
+			continue
+		}
+		if err := e.a.RemoveFile(); err != nil {
+			if failed == nil {
+				failed = make(map[string]error)
+			}
+			failed[uid] = err
+			continue
+		}
+		delete(p.byUID, uid)
+		removed++
+	}
+	if removed > 0 {
+		p.dirty.Store(true)
+		p.saveLocked()
+	}
+	return removed, failed
+}
+
 // upsertLocked 更新或插入单个账号；已存在则只换凭证、保留 credits/cooling 状态。
 // 调用方必须已持有 p.mu；Add 与 SyncToDir 共用此 upsert 逻辑。
 func (p *Pool) upsertLocked(a *auth.Auth) {

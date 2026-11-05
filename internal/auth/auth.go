@@ -23,6 +23,8 @@ import (
 type Auth struct {
 	// mu 串行化 RefreshToken 写与 SaveAtomic 读，防止并发写回半更新 token。
 	mu sync.Mutex
+	// removed 防止删除后，仍在执行的刷新任务重新写出凭证文件；由 mu 保护。
+	removed bool
 
 	AccessToken  string
 	RefreshToken string
@@ -399,12 +401,33 @@ func Parse(raw []byte) (*Auth, error) {
 	return &a, nil
 }
 
+// RemoveFile 删除凭证文件，并阻止本对象后续 SaveAtomic 将其重新创建。
+// 与 SaveAtomic 共用锁；文件已不存在或未设置路径时也视为删除成功。
+func (a *Auth) RemoveFile() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.removed {
+		return nil
+	}
+	if a.FilePath != "" {
+		if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	a.removed = true
+	return nil
+}
+
 // SaveAtomic 以嵌套形原子写回 FilePath（tmp + rename），保持嵌套形（插件可读）格式。
 // 全程持 a.mu：防止与 RefreshToken 修改 token 字段并发，杜绝写回半更新。
 // 防御：accessToken 为空时拒绝写回，避免误用空凭证覆盖有效文件。
+// 已经 RemoveFile 的对象不再写盘，避免在途保活任务复活已删除账号。
 func (a *Auth) SaveAtomic() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.removed {
+		return nil
+	}
 	if strings.TrimSpace(a.AccessToken) == "" {
 		return fmt.Errorf("save refused: empty accessToken (uid=%s)", a.UID)
 	}
