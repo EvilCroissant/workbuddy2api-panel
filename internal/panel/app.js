@@ -377,7 +377,7 @@ let packageLoadSeq = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API 密钥', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', keys: 'API 密钥', redpackets: '红包', config: '配置', logs: '运行日志' };
 function go(v) {
   if (v !== 'keys') {
     invalidateKeyView();
@@ -386,8 +386,9 @@ function go(v) {
     $('keyModelEditor').hidden = true;
     keyModelEditingId = '';
   }
-  $('btnAdd').hidden = v === 'keys';
-  $('btnRefresh').hidden = v === 'keys';
+  $('btnAdd').hidden = v === 'keys' || v === 'redpackets';
+  $('btnRefresh').hidden = v === 'keys' || v === 'redpackets';
+  if (v !== 'redpackets' && typeof dismissPacketView === 'function') dismissPacketView();
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.view === v));
@@ -400,6 +401,7 @@ function go(v) {
     loadKeys();
     if (keyUsageState.expandedId) loadKeyUsage(keyUsageState.expandedId);
   }
+  if (v === 'redpackets' && typeof loadPackets === 'function') loadPackets();
   if (v === 'logs') loadLogs();
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
@@ -1267,6 +1269,7 @@ const CFG_MAP = {
   international_account_order: ['pool', 'account_order', 'international'],
   listen: ['listen'], api_key: ['api_key'],
   package_detail_limit: ['panel', 'package_detail_limit'],
+  claim_trusted_proxies: ['panel', 'claim_trusted_proxies'],
   checkin_hours: ['schedule', 'checkin_hours'], checkin_enabled: ['schedule', 'checkin_enabled'], growth_hours: ['schedule', 'growth_hours'], growth_enabled: ['schedule', 'growth_enabled'],
   travel_hours: ['schedule', 'travel_hours'], travel_enabled: ['schedule', 'travel_enabled'],
   activity_hours: ['schedule', 'activity_hours'], activity_enabled: ['schedule', 'activity_enabled'],
@@ -1341,7 +1344,7 @@ function collectConfig() {
     else {
       const raw = el.value.trim();
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
-      if (name.endsWith('_account_order')) v = raw.split(/[,，\s]+/).filter(Boolean);
+      if (name.endsWith('_account_order') || name === 'claim_trusted_proxies') v = raw.split(/[,，\s]+/).filter(Boolean);
       else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
@@ -1425,6 +1428,12 @@ function dismissCreatedKey() {
 }
 
 const KEY_MODEL_PICKERS = {
+  packet: {
+    count: 'packetModelCount', mode: 'packetModelMode', picker: 'packetModelPicker',
+    search: 'packetModelSearch', clear: 'packetModelClear', selected: 'packetModelSelected',
+    list: 'packetModelList', manual: 'packetManualModel', addManual: 'packetAddManual',
+    hidden: 'packetAllowedModels',
+  },
   create: {
     count: 'keyCreateModelCount', mode: 'keyCreateModelMode', picker: 'keyCreateModelPicker',
     search: 'keyCreateModelSearch', clear: 'keyCreateModelClear', selected: 'keyCreateModelSelected',
@@ -1439,6 +1448,7 @@ const KEY_MODEL_PICKERS = {
   },
 };
 const keyModelPickerStates = {
+  packet: { mode: 'all', selected: [], search: '', catalog: [], loading: false, loaded: false, error: '' },
   create: { mode: 'all', selected: [], search: '', catalog: [], loading: false, loaded: false, error: '' },
   edit: { mode: 'all', selected: [], search: '', catalog: [], loading: false, loaded: false, error: '' },
 };
@@ -1980,15 +1990,16 @@ function renderKeys() {
     const lastAt = parseAPITime(stats.last_used_at);
     const lastTitle = lastAt ? fmtLocalDateTime(lastAt) : '尚无已鉴权调用';
     const expanded = keyUsageState.expandedId === k.id;
+    const keyStatus = k.quota && typeof packetKeyState === 'function' ? packetKeyState(k) : k.enabled ? '已启用' : '已停用';
     const row = '<tr class="key-row" data-key-id="' + esc(k.id) + '">' +
       '<td class="key-person-cell"><div class="key-person"><span class="key-avatar" aria-hidden="true">' +
       esc(Array.from(k.name)[0] || 'K') + '</span><div><div class="key-name">' +
       esc(k.name) + '</div><div class="key-subtitle"><code>' + esc(k.prefix) +
       '…</code><span>创建于 ' + esc(fmtLocalDateTime(parseAPITime(k.created_at))) +
       '</span></div><div class="key-model-policy" title="' + esc((k.allowed_models || []).join('、')) + '">' +
-      ((k.allowed_models || []).length ? '允许 ' + k.allowed_models.length + ' 个模型' : '全部模型') + '</div></div></div></td>' +
-      '<td class="key-status-cell"><span class="key-status ' + (k.enabled ? 'is-enabled' : '') +
-      '"><i></i>' + (k.enabled ? '已启用' : '已停用') + '</span></td>' +
+      ((k.allowed_models || []).length ? '允许 ' + k.allowed_models.length + ' 个模型' : '全部模型') + (k.quota ? '<div class="key-model-policy">红包 · ' + esc(typeof packetQuotaLabel === 'function' ? packetQuotaLabel(k.quota) : '限额 Key') + '</div>' : '') + '</div></div></div></td>' +
+      '<td class="key-status-cell"><span class="key-status ' + ((keyStatus === '已启用' || keyStatus === '可用') ? 'is-enabled' : '') +
+      '"><i></i>' + esc(keyStatus) + '</span></td>' +
       '<td class="num key-metric-cell" data-l="请求">' +
       metricText(fmtTok(stats.requests)) + '</td>' +
       '<td class="num key-metric-cell ' + (known ? keyRateClass(stats) : 'is-muted') +

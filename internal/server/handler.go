@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -158,7 +159,7 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if (h.cfg.RequestLog != nil || h.cfg.KeyUsage != nil) && h.tracedRequest(r) {
+	if (h.cfg.RequestLog != nil || h.cfg.KeyUsage != nil || h.cfg.Keys != nil) && h.tracedRequest(r) {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now(), path: r.URL.Path}
 		if isSearchPath(r.URL.Path) {
 			// 搜索不是模型调用，但面板「模型」列空着无法区分这类流量；
@@ -244,6 +245,34 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		if !valid {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_api_key", "missing or invalid API key")
 			return
+		}
+		if r.Method == http.MethodPost && distributedKeyID(r) != "" {
+			lease, err := h.cfg.Keys.BeginQuota(distributedKeyID(r))
+			if err != nil {
+				status, code := http.StatusPaymentRequired, "quota_exceeded"
+				message := err.Error()
+				if !errors.Is(err, httpauth.ErrQuotaExhausted) && !errors.Is(err, httpauth.ErrQuotaUncertain) && !errors.Is(err, httpauth.ErrPacketClosed) {
+					status, code = http.StatusServiceUnavailable, "quota_unavailable"
+					log.Printf("ERR: [quota] reserve key=%s: %v", distributedKeyID(r), err)
+					message = "额度存储暂不可用，请联系管理员"
+				}
+				writeOpenAIError(w, status, code, message)
+				return
+			}
+			if lease != nil {
+				defer func() {
+					if err := lease.Finish(); err != nil {
+						log.Printf("ERR: [quota] settle key=%s: %v (key paused)", distributedKeyID(r), err)
+					}
+				}()
+				if r.URL.Path != "/v1/chat/completions" {
+					writeOpenAIError(w, http.StatusForbidden, "quota_route_not_allowed", "红包 Key 仅支持模型对话，搜索端点不提供完整用量结算")
+					return
+				}
+				if tr := requestTraceFrom(r); tr != nil {
+					tr.quota = lease
+				}
+			}
 		}
 		next(w, r)
 	}
@@ -952,6 +981,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 
 		// 客户端 IP 按请求传递（PassthroughIP 开启时注入；消除共享字段竞态）。
 		attemptStarted := time.Now()
+		if tr := requestTraceFrom(r); tr != nil {
+			tr.quota.StartAttempt()
+		}
 		rc, status, respBody, terr := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, body, clientIP, chatMeta)
 		// 分类信封一次成型：upstream 已在错误路径返回 *upstream.Error（Kind +
 		// Retry-After 头解析）。传输层错误（非 *Error）走抖动换号分支；防御分支
@@ -995,6 +1027,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if status >= 400 {
+			if tr := requestTraceFrom(r); tr != nil {
+				tr.quota.RejectAttempt()
+			}
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = status
 			var kind upstream.ErrKind
@@ -1192,6 +1227,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.cacheHit, st.cacheMiss, st.hasCache = hit, miss, true
 			}
 			recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted, stats.TTFB())
+			observeQuota(r, stats.Usage(), credit, hasCredit)
+			if !stats.sawDone {
+				if tr := requestTraceFrom(r); tr != nil {
+					tr.quota.MarkUncertain()
+				}
+			}
 			// WARN 信号放 recordAttempt 之后：st.promptTokens 此时才是本次的观测值。
 			if st.hasCache {
 				cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
@@ -1226,7 +1267,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			rc.Close()
 			return
 		}
-		resp, err := upstream.Aggregate(rc)
+		var aggregateReader io.Reader = rc
+		var quotaStats *chatStatsReader
+		if tr := requestTraceFrom(r); tr != nil && tr.quota != nil {
+			quotaStats = newChatStatsReaderSince(rc, attemptStarted)
+			aggregateReader = quotaStats
+		}
+		resp, err := upstream.Aggregate(aggregateReader)
 		rc.Close()
 		if err != nil {
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
@@ -1254,6 +1301,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
+		quotaUsage, _ := resp["usage"].(map[string]any)
+		quotaCredit, quotaCreditKnown := quotaUsage["credit"].(float64)
+		observeQuota(r, usageDeltaFromResponse(resp), quotaCredit, quotaCreditKnown)
+		if quotaStats != nil && !quotaStats.sawDone {
+			if tr := requestTraceFrom(r); tr != nil {
+				tr.quota.MarkUncertain()
+			}
+		}
 		if st.hasCache {
 			cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
 		}
@@ -1419,9 +1474,9 @@ func usageCreditTotal(resp map[string]any) (credit float64, total int, ok bool) 
 	if usage == nil {
 		return 0, 0, false
 	}
-	c, _ := usage["credit"].(float64)
-	t, _ := usage["total_tokens"].(float64)
-	if t <= 0 {
+	c, creditKnown := usage["credit"].(float64)
+	t, totalKnown := usage["total_tokens"].(float64)
+	if !creditKnown || !totalKnown || c < 0 || math.IsNaN(c) || math.IsInf(c, 0) || t <= 0 || math.IsNaN(t) || math.IsInf(t, 0) {
 		return 0, 0, false
 	}
 	return c, int(t), true

@@ -859,3 +859,14 @@ func TestServerReadTimeout(t *testing.T) {
 		t.Error("unparsable read_timeout should fail fast")
 	}
 }
+
+func TestClaimTrustedProxyConfig(t *testing.T) {
+	if _, err := ParseConfig([]byte(`{"panel":{"claim_trusted_proxies":["127.0.0.1/32","172.19.0.0/24","::1/128"]}}`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{`{"panel":{"claim_trusted_proxies":["*"]}}`, `{"panel":{"claim_trusted_proxies":["127.0.0.1"]}}`} {
+		if _, err := ParseConfig([]byte(raw)); err == nil {
+			t.Fatalf("invalid proxy range accepted: %s", raw)
+		}
+	}
+}

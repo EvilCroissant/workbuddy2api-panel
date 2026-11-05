@@ -658,6 +658,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#keys" data-view="keys">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="5" cy="6" r="3"/><path d="m7.2 8.2 5.3 5.3M10 11l2-2M12 13l2-2"/></svg>
         API 密钥</a></li>
+      <li><a href="#redpackets" data-view="redpackets">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="3" y="2" width="10" height="12" rx="2"/><path d="m3 5 5 3 5-3M6 10h4M8 9v4"/></svg>
+        红包</a></li>
       <li><a href="#config" data-view="config">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3"/></svg>
         配置</a></li>
@@ -1088,6 +1091,73 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <details class="key-guide"><summary>如何在客户端使用？</summary><p>Base URL 填写本网关地址并以 <code>/v1</code> 结尾；API Key 填写新生成的 <code>sk-wb-…</code> 密钥。分发密钥可调用聊天、搜索与模型列表。</p></details>
     </section>
 
+    <!-- 红包 -->
+    <section class="view" id="view-redpackets" hidden>
+      <div class="box key-summary" aria-label="红包概览">
+        <div class="stat"><div class="v" id="packetTotal">—</div><div class="k">全部红包</div></div>
+        <div class="stat good"><div class="v" id="packetActive">—</div><div class="k">领取中</div></div>
+        <div class="stat"><div class="v" id="packetClaimed">—</div><div class="k">已领取份数</div></div>
+        <div class="key-create-action"><button type="button" class="primary" id="btnPacketOpen" disabled>发红包</button></div>
+      </div>
+      <div class="box" id="packetComposer" hidden>
+        <header><h3>发红包</h3><span class="grow"></span><button class="xs ghost" type="button" id="btnPacketCancel">取消</button></header>
+        <form class="pad" id="packetForm">
+          <label class="fld"><span class="lb">红包祝福 / 备注</span><input id="packetTitle" maxlength="60" placeholder="送你一个红包" autocomplete="off"></label>
+          <div class="grid2">
+            <label class="fld"><span class="lb">额度类别</span><select id="packetKind"><option value="credit">积分 · 按真实扣费</option><option value="tokens">Token · 按总 Token 数</option></select></label>
+            <label class="fld"><span class="lb">分配方式</span><select id="packetMode"><option value="random">拼手气</option><option value="equal">均分</option></select></label>
+          </div>
+          <div class="grid3">
+            <label class="fld"><span class="lb" id="packetAmountLabel">总积分</span><input id="packetAmount" type="number" min="0.000001" max="1000000000" step="0.000001" value="1000" required></label>
+            <label class="fld"><span class="lb">份数</span><input id="packetShares" type="number" min="1" max="1000" step="1" value="10" required></label>
+            <label class="fld"><span class="lb">有效期（天）</span><input id="packetDays" type="number" min="1" max="365" step="1" value="7" required><span class="hint">从创建起计算，领取与 Key 共用此期限。</span></label>
+          </div>
+            <div class="fld key-model-field" id="packetModelField">
+              <div class="key-model-field-head"><span class="lb">允许使用的模型</span><span class="key-model-count" id="packetModelCount">全部模型</span></div>
+              <div class="key-model-mode" id="packetModelMode" role="group" aria-label="模型权限模式">
+                <button type="button" data-key-model-mode="all" class="on" aria-pressed="true">全部模型</button>
+                <button type="button" data-key-model-mode="selected" aria-pressed="false">指定模型</button>
+              </div>
+              <div class="key-model-picker" id="packetModelPicker" hidden>
+                <div class="key-model-toolbar">
+                  <div class="search-field key-model-search"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4"/></svg><input id="packetModelSearch" type="search" placeholder="搜索模型 ID 或名称…" aria-label="搜索模型"></div>
+                  <button type="button" class="xs ghost" id="packetModelClear" disabled>清除已选</button>
+                </div>
+                <div class="key-model-selected" id="packetModelSelected" aria-live="polite" hidden></div>
+                <div class="key-model-catalog" id="packetModelList" aria-live="polite"><div class="key-model-state">正在读取模型目录…</div></div>
+                <details class="key-model-manual">
+                  <summary>手动添加模型 ID</summary>
+                  <div class="key-model-manual-row"><input id="packetManualModel" maxlength="200" placeholder="例如 glm-5.2 或 global:glm-5.2" autocomplete="off" spellcheck="false"><button type="button" class="xs" id="packetAddManual">添加</button></div>
+                  <p>裸模型名按国内版处理；目录读取失败时仍可用。</p>
+                </details>
+              </div>
+              <span class="hint">Token 红包需指定模型；红包 Key 仅支持模型对话。</span>
+              <input type="hidden" id="packetAllowedModels">
+            </div>
+
+          <p class="hint packet-policy">支持同一 Key 并发请求，按上游真实用量逐笔结算；额度用完后停止新请求，已在执行的请求仍会结算，累计用量可能超出额度。用量缺失时暂停并待管理员核对。</p>
+          <div class="packet-form-actions"><span class="hint" id="packetPreview">—</span><span class="grow"></span><button type="submit" class="primary" id="btnPacketCreate">生成红包</button></div>
+          <p class="hint packet-error" id="packetCreateError" role="alert" hidden></p>
+        </form>
+      </div>
+      <div class="box">
+        <header><h3>红包记录 <span class="hint" id="packetsCount"></span></h3><span class="grow"></span><button class="xs" id="btnPacketRefresh">刷新</button></header>
+        <div class="fbar"><input id="packetsSearch" type="search" placeholder="搜索祝福或红包 ID" aria-label="搜索红包"><select id="packetsStatus" aria-label="红包状态"><option value="">全部状态</option><option value="active">领取中</option><option value="claimed">已领完</option><option value="expired">已过期</option><option value="revoked">已收回</option></select></div>
+        <div class="tbl-wrap"><table class="acc zebra"><thead><tr><th>红包</th><th>状态</th><th>总额度 / 已用</th><th>领取进度</th><th>到期时间</th><th>操作</th></tr></thead><tbody id="packetsBody"><tr><td colspan="6">正在读取…</td></tr></tbody></table></div>
+        <div class="list-pager" role="group" aria-label="红包分页"><span class="page-info" id="packetsPageInfo" aria-live="polite"></span><label>每页 <select id="packetsPageSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label><button class="xs" id="packetsPrev">上一页</button><span id="packetsPageNumber">1 / 1</span><button class="xs" id="packetsNext">下一页</button></div>
+      </div>
+      <p class="hint" id="packetsNote" role="status">领取链接按 IP 一人一份；同一 IP 再次打开可取回原 Key。</p>
+      <div class="box" id="packetDetail" hidden>
+        <header><h3 id="packetDetailTitle">红包详情</h3><span class="grow"></span><button class="xs ghost" id="btnPacketDetailClose">关闭</button></header>
+        <div class="pad"><p class="hint" id="packetDetailMeta"></p><label class="fld"><span class="lb">领取链接</span><input id="packetLink" readonly autocomplete="off"></label><div class="packet-detail-actions"><button id="btnPacketLinkCopy">复制领取链接</button><button id="btnPacketExport">导出密钥</button><button class="ghost danger" id="btnPacketRevoke">收回红包</button></div>
+        <p class="hint packet-policy">未领取的 Key 暂不生效；收回会删除该批全部 Key，历史已用额度保留。</p></div>
+        <div class="tbl-wrap"><table class="acc zebra"><thead><tr><th>密钥</th><th>状态</th><th>额度</th><th>已用</th><th>剩余</th><th>操作</th></tr></thead><tbody id="packetKeysBody"></tbody></table></div>
+        <div class="list-pager" role="group" aria-label="红包密钥分页"><span class="page-info" id="packetKeysPageInfo"></span><label>每页 <select id="packetKeysPageSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label><button class="xs" id="packetKeysPrev">上一页</button><span id="packetKeysPageNumber">1 / 1</span><button class="xs" id="packetKeysNext">下一页</button></div>
+        <div class="pad" id="packetReconcile" hidden><form id="packetReconcileForm"><label class="fld"><span class="lb" id="packetReconcileLabel">核对后的累计已用额度</span><input id="packetReconcileUsed" type="number" min="0" step="0.000001" required></label><p class="hint">核对上游扣费后填写累计用量，保存后解除暂停。</p><div class="packet-detail-actions"><button type="submit" class="primary" id="btnPacketReconcileSave">保存核对结果</button><button type="button" id="btnPacketReconcileCancel">取消</button></div></form></div>
+        <div class="pad" id="packetSecretBox" hidden><label class="fld"><span class="lb">完整 API Key</span><input id="packetSecret" readonly autocomplete="off" spellcheck="false"></label><div class="packet-detail-actions"><button id="btnPacketSecretCopy">复制 Key</button><button id="btnPacketSecretClose">关闭</button></div></div>
+      </div>
+    </section>
+
     <!-- 配置 -->
     <section class="view" id="view-config" hidden>
       <form id="cfgForm">
@@ -1106,6 +1176,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <label class="fld"><span class="lb">单账号明细默认展示条数</span>
               <input name="package_detail_limit" type="number" min="1" placeholder="5">
               <span class="hint">积分构成页按最早到期展示，其余未用完包聚合</span></label>
+            <label class="fld"><span class="lb">红包领取可信代理（CIDR）</span>
+              <input name="claim_trusted_proxies" placeholder="例如：127.0.0.1/32, 172.19.0.2/32">
+              <span class="hint">经反向代理领取时，填网关看到的代理 IP 网段，以识别真实客户端 IP；逗号分隔，留空使用直连 IP。需重启。</span></label>
           </div>
         </div>
 
@@ -1552,6 +1625,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 <div id="toasts"></div>
 
 <script src="app.js"></script>
+<script src="packets.js"></script>
 <script src="mobile.js"></script>
 </body>
 </html>

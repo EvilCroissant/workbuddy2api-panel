@@ -246,3 +246,35 @@
   .key-event-num { display: flex; flex-direction: column; gap: 2px; padding: 5px 6px; background: var(--surface-2); }
   .key-event-num::before { content: attr(data-l); color: var(--ink-3); font-size: 9px; }
 }
+
+/* 红包沿用官方面板的表单、表格与配色。 */
+.packet-form-actions, .packet-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.packet-form-actions .grow { flex: 1; }
+.packet-policy { margin: 12px 0 18px; }
+.packet-error { margin-top: 12px; color: var(--bad); font-size: 12.5px; overflow-wrap: anywhere; }
+#packetDetailMeta { margin-bottom: 16px; overflow-wrap: anywhere; }
+#packetSecret, #packetLink { font: 12px/1.6 var(--mono); }
+.claim-page { height: auto; min-height: 100vh; }
+.claim-shell { width: min(100% - 32px, 480px); margin: 64px auto 32px; }
+.claim-brand { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; color: var(--ink-3); font-size: 12px; }
+.claim-card > header { display: flex; flex-direction: column; align-items: flex-start; padding: 24px; gap: 8px; }
+.claim-card h1 { font-size: 20px; font-weight: 600; overflow-wrap: anywhere; }
+.claim-mark { color: var(--accent); margin-bottom: 6px; }
+.claim-card > .pad { padding: 24px; }
+.claim-amount { display: flex; align-items: baseline; gap: 10px; margin-bottom: 16px; }
+.claim-amount strong { font: 600 32px var(--mono); overflow-wrap: anywhere; }
+.claim-amount span { color: var(--ink-3); font-size: 12px; }
+.claim-models { margin: 12px 0 20px; overflow-wrap: anywhere; }
+#btnClaim { width: 100%; }
+#claimResult > p { margin-bottom: 14px; }
+#claimResult .fld { margin-top: 16px; }
+#claimResult input { font: 12px/1.6 var(--mono); }
+.claim-foot { color: var(--ink-3); font-size: 12px; text-align: center; padding: 0 16px; }
+@media (max-width: 760px) {
+  .claim-shell { margin-top: 28px; }
+  .claim-card > header, .claim-card > .pad { padding: 20px; }
+  .claim-amount { flex-wrap: wrap; }
+  #packetKeysBody tr > td:first-child, #packetsBody tr > td:first-child { grid-column: 1 / -1; overflow-wrap: anywhere; }
+  .packet-form-actions .grow { display: none; }
+  .packet-form-actions > button { width: 100%; }
+}

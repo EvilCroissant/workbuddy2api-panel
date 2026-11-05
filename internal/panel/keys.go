@@ -171,7 +171,7 @@ func (p *Panel) deleteKey(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) keyResult(w http.ResponseWriter, err error) {
 	if errors.Is(err, httpauth.ErrKeyNotFound) {
 		writeErr(w, http.StatusNotFound, "key not found")
-	} else if errors.Is(err, httpauth.ErrKeyModels) {
+	} else if errors.Is(err, httpauth.ErrKeyModels) || errors.Is(err, httpauth.ErrPacketModels) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	} else if errors.Is(err, httpauth.ErrKeySecretUnavailable) {
 		writeErr(w, http.StatusConflict, err.Error())

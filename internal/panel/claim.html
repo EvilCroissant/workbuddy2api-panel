@@ -1,0 +1,13 @@
+<body class="claim-page">
+<main class="claim-shell">
+  <div class="claim-brand"><span>WorkBuddy2API</span><button class="xs ghost" id="claimTheme" aria-label="切换主题">切换主题</button></div>
+  <section class="box claim-card">
+    <header><div class="claim-mark" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="m5 7 7 4 7-4M9 15h6M12 13v6"/></svg></div><h1 id="claimTitle">领取红包</h1><p class="hint" id="claimMode">—</p></header>
+    <div class="pad"><div class="claim-amount"><strong id="claimAmount">—</strong><span id="claimUnit">额度</span></div><p class="hint" id="claimProgress" role="status" aria-live="polite">正在查询红包…</p><p class="hint" id="claimExpiry"></p><p class="claim-models hint" id="claimModels"></p><button class="primary" id="btnClaim" disabled>领取一份</button><p class="packet-error" id="claimError" role="alert" hidden></p>
+      <div id="claimResult" hidden><div class="hr"></div><p id="claimResultNote">领取成功，请保存下方 Key。</p><label class="fld"><span class="lb">API Key</span><input id="claimSecret" readonly autocomplete="off" spellcheck="false"></label><button class="primary" id="claimCopy">复制 Key</button><label class="fld"><span class="lb">Base URL</span><input id="claimBase" readonly></label><p class="hint" id="claimQuota"></p><p class="hint">仅支持模型对话，支持同一 Key 并发请求；按上游真实用量逐笔结算，额度用完后停止新请求，已在执行的请求仍会结算，累计用量可能超出额度。</p></div>
+    </div>
+  </section>
+  <p class="claim-foot">每个 IP 领取一份；同一 IP 可取回原 Key。有效期从红包创建时起算。</p>
+</main>
+<script src="/panel/claim.js"></script>
+</body></html>

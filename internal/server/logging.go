@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/httpauth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
@@ -98,6 +99,7 @@ func (s *chatStat) done() {
 // 并记录首个 data 帧的 TTFB；原始字节原样返回给下游透传。
 // 注意：不做 rune 估算，token 数一律采信上游 usage。
 type chatStatsReader struct {
+	sawDone             bool
 	br                  *bufio.Reader
 	start               time.Time
 	ttfb                time.Duration
@@ -158,6 +160,7 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 	payload := strings.TrimPrefix(line, "data: ")
 	if payload == "[DONE]" {
+		s.sawDone = true
 		return
 	}
 	if !s.seen {
@@ -370,6 +373,7 @@ type requestTraceKey struct{}
 
 // requestTrace 在一次 chat 请求内共享标识与最终统计，ServeHTTP 出口统一记账。
 type requestTrace struct {
+	quota *httpauth.QuotaLease
 	id    string
 	start time.Time
 	// path 实际请求路径（chat / search / search messages）。此前 Path 在 event() 里
@@ -385,6 +389,18 @@ type requestTrace struct {
 	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
 	clientIP  string
 	userAgent string
+}
+
+func observeQuota(r *http.Request, delta pool.TokenUsageDelta, credit float64, hasCredit bool) {
+	if tr := requestTraceFrom(r); tr != nil {
+		tokens := delta.TotalTokens
+		known := delta.HasTotalTokens
+		if !known && delta.HasPromptTokens && delta.HasCompletionTokens {
+			tokens = delta.PromptTokens + delta.CompletionTokens
+			known = true
+		}
+		tr.quota.Observe(tokens, known, credit, hasCredit)
+	}
 }
 
 // captureClientInfo 采集调用来源（客户端 IP + 截断后的 UA）。开关关闭时保持空串：
