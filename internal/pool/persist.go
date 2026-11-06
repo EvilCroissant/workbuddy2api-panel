@@ -141,9 +141,15 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 		if int64(s.ErrCount) > errTotal {
 			errTotal = int64(s.ErrCount)
 		}
+		// 旧状态中 0/0 也可能来自未查询账号，只有非零余额/总额能证明已有观测。
+		creditsKnown := s.Credits > 0 || s.CreditsTotal > 0
+		if s.CreditsKnown != nil {
+			creditsKnown = *s.CreditsKnown
+		}
 		e := &entry{
 			a:                        &auth.Auth{UID: uid}, // placeholder，Add 时会换成完整凭证
 			credits:                  s.Credits,
+			creditsKnown:             creditsKnown,
 			creditsTotal:             s.CreditsTotal,
 			creditsExpiring:          s.CreditsExpiring,
 			creditsEarliestExpiry:    s.CreditsEarliestExpiry,
@@ -292,8 +298,10 @@ func (p *Pool) stateOverviewLocked() stateFile {
 	now := time.Now()
 	sf := stateFile{Accounts: map[string]stateAccount{}, Scheduling: p.scheduling}
 	for uid, e := range p.byUID {
+		creditsKnown := e.creditsKnown
 		s := stateAccount{
 			Credits:                  e.credits,
+			CreditsKnown:             &creditsKnown,
 			CreditsTotal:             e.creditsTotal,
 			Disabled:                 e.disabled,
 			Paused:                   e.paused,

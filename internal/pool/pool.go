@@ -403,10 +403,20 @@ func (p *Pool) Remove(uid string) *auth.Auth {
 // RemoveDisabled 删除当前全部禁用账号及凭证，批次结束时只持久化一次池状态。
 // 状态判断与移除在同一把锁内，避免误删已被复活的账号；凭证删除失败则保留原条目。
 func (p *Pool) RemoveDisabled() (removed int, failed map[string]error) {
+	return p.removeMatching(func(e *entry) bool { return e.disabled })
+}
+
+// RemoveZeroCredits 删除已取得余额且当前可用积分为 0 的账号及凭证。
+// 未查询/未知余额不作为零积分处理；以删除时的池状态为准，不发起上游查询。
+func (p *Pool) RemoveZeroCredits() (removed int, failed map[string]error) {
+	return p.removeMatching(func(e *entry) bool { return e.creditsKnown && e.credits == 0 })
+}
+
+func (p *Pool) removeMatching(match func(*entry) bool) (removed int, failed map[string]error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for uid, e := range p.byUID {
-		if !e.disabled {
+		if !match(e) {
 			continue
 		}
 		if err := e.a.RemoveFile(); err != nil {

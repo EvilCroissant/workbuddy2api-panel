@@ -15,6 +15,7 @@ func (p *Pool) SetCredits(uid string, credits, total int64) {
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
 		e.credits = credits
+		e.creditsKnown = credits >= 0
 		e.creditsTotal = total
 		p.dirty.Store(true)
 	}
@@ -115,6 +116,7 @@ func (p *Pool) SetCreditsSnapshot(uid string, s CreditsSnapshot) {
 		earliestRemaining = 0
 	}
 	e.credits = credits
+	e.creditsKnown = s.Remain >= 0
 	e.creditsTotal = s.Total
 	e.creditsExpiring = expiring
 	e.creditsEarliestExpiry = earliestAt

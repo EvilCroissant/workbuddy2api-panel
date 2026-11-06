@@ -294,6 +294,75 @@ const load = () => vm.runInContext('loadOverview(true)', sandbox);
   assert.ok(notices[1].text.includes('已保留'));
   assert.ok(notices[1].text.includes('permission denied'));
   assert.equal(notices[1].kind, 'err');
+
+  // 零积分删除仅包含已有余额记录的账号；默认零值、负数和正余额均不纳入。
+  response = { ...overview, disabled: 1, accounts: [
+    { uid: 'unknown', credits: 0 },
+    { uid: 'failed-query', credits: 0, credits_known: false, credits_total: 100 },
+    { uid: 'negative', credits: -1, credits_known: true },
+    { uid: 'positive', credits: 1, credits_known: true },
+  ] };
+  await load();
+  assert.equal(el('btnRemoveZeroCredits').disabled, true);
+  const zeroAccounts = Array.from({ length: 526 }, (_, i) => ({
+    uid: 'zero-' + i, credits: 0, credits_known: true, credits_total: i % 2 ? 100 : 0,
+    disabled: i % 4 === 1, paused: i % 4 === 2, realm: i % 2 ? 'global' : 'cn',
+  }));
+  response = { ...response, accounts: [...response.accounts, ...zeroAccounts] };
+  await load();
+  set('accRealm', 'cn');
+  set('accSearch', 'not-present');
+  assert.equal(el('btnRemoveZeroCredits').disabled, false);
+  assert.ok(el('btnRemoveZeroCredits').title.includes('526'));
+  confirmed = false;
+  deleteCalls = 0;
+  sandbox.fetch = async (url, opts) => {
+    if (url.startsWith('/panel/api/accounts/remove_')) {
+      assert.equal(url, '/panel/api/accounts/remove_zero_credits');
+      assert.equal(opts.method, 'POST');
+      deleteCalls++;
+      return new Promise(resolve => { finishDelete = body => resolve({ ok: true, status: 200, json: async () => body }); });
+    }
+    return { ok: true, status: 200, json: async () => response };
+  };
+  await el('btnRemoveZeroCredits').onclick();
+  assert.equal(deleteCalls, 0, 'cancel zero-credit deletion without making a request');
+  assert.ok(confirmation.includes('526'));
+  assert.ok(confirmation.includes('余额未知的账号会保留'));
+  assert.ok(confirmation.includes('不受筛选和分页影响'));
+  confirmed = true;
+  const zeroDeleting = el('btnRemoveZeroCredits').onclick();
+  assert.equal(el('btnRemoveZeroCredits').textContent, '删除中…');
+  assert.equal(el('btnRemoveZeroCredits').disabled, true);
+  assert.equal(el('btnRemoveDisabled').disabled, true);
+  await el('btnRemoveZeroCredits').onclick();
+  await el('btnRemoveDisabled').onclick();
+  await load();
+  assert.equal(el('btnRemoveZeroCredits').disabled, true, 'polling does not re-enable bulk deletion');
+  assert.equal(deleteCalls, 1, 'both deletion actions share one busy guard');
+  evalJS('lastPackages = {accounts: []}; lastPackagesAt = Date.now(); packagePageData = {}; packagePageAt = Date.now();');
+  response = { ...response, accounts: [accounts[0]] };
+  finishDelete({ removed: 526, failed: 0, errors: [] });
+  await zeroDeleting;
+  assert.equal(el('btnRemoveZeroCredits').disabled, true);
+  assert.equal(el('btnRemoveZeroCredits').textContent, '删除零积分');
+  assert.equal(el('btnRemoveDisabled').disabled, false);
+  assert.ok(notices[2].text.includes('526'));
+  assert.equal(evalJS('lastPackages === null && packagePageData === null'), true, 'deleted accounts invalidate package caches');
+
+  response = { ...response, accounts: [zeroAccounts[0]] };
+  await load();
+  const zeroPartial = el('btnRemoveZeroCredits').onclick();
+  finishDelete({ removed: 0, failed: 1, errors: [{ uid: 'zero-0', error: 'permission denied' }] });
+  await zeroPartial;
+  assert.equal(el('btnRemoveZeroCredits').disabled, false);
+  assert.ok(notices[3].text.includes('已保留'));
+  assert.ok(notices[3].text.includes('permission denied'));
+  sandbox.fetch = async () => { throw new Error('network failure'); };
+  await el('btnRemoveZeroCredits').onclick();
+  assert.equal(el('btnRemoveZeroCredits').disabled, false, 'request failure restores the action');
+  assert.equal(el('btnRemoveZeroCredits').textContent, '删除零积分');
+  assert.ok(notices[4].text.includes('network failure'));
   console.log('OVERVIEW OK');
 })().catch(err => { console.error(err); process.exitCode = 1; });`
 	path := filepath.Join(t.TempDir(), "overview.cjs")

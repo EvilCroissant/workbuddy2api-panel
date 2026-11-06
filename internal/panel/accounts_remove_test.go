@@ -13,9 +13,17 @@ import (
 )
 
 func TestAccountsRemoveDisabled(t *testing.T) {
+	testAccountsBulkRemove(t, "remove_disabled", false)
+}
+
+func TestAccountsRemoveZeroCredits(t *testing.T) {
+	testAccountsBulkRemove(t, "remove_zero_credits", true)
+}
+
+func testAccountsBulkRemove(t *testing.T, endpoint string, zeroCredits bool) {
 	dir := t.TempDir()
 	accounts := pool.New("")
-	for _, uid := range []string{"disabled", "healthy", "paused"} {
+	for _, uid := range []string{"disabled", "healthy", "paused", "unknown"} {
 		a := &auth.Auth{UID: uid, AccessToken: "at", FilePath: filepath.Join(dir, "workbuddy-"+uid+".json")}
 		if err := a.SaveAtomic(); err != nil {
 			t.Fatal(err)
@@ -23,6 +31,9 @@ func TestAccountsRemoveDisabled(t *testing.T) {
 		accounts.Add(a)
 	}
 	accounts.Disable("disabled", "restricted")
+	accounts.SetCredits("disabled", 0, 0)
+	accounts.SetCredits("healthy", 50, 100)
+	accounts.SetCredits("paused", 50, 100)
 	accounts.Pause("paused")
 	blocked := filepath.Join(dir, "blocked.json")
 	if err := os.Mkdir(blocked, 0700); err != nil {
@@ -33,9 +44,10 @@ func TestAccountsRemoveDisabled(t *testing.T) {
 	}
 	accounts.Add(&auth.Auth{UID: "failed", FilePath: blocked})
 	accounts.Disable("failed", "restricted")
+	accounts.SetCredits("failed", 0, 100)
 	p := New(Config{Pool: accounts, APIKey: "admin"})
 	call := func(method, key string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, "/panel/api/accounts/remove_disabled", nil)
+		r := httptest.NewRequest(method, "/panel/api/accounts/"+endpoint, nil)
 		if key != "" {
 			r.Header.Set("Authorization", "Bearer "+key)
 		}
@@ -73,12 +85,15 @@ func TestAccountsRemoveDisabled(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "workbuddy-disabled.json")); !os.IsNotExist(err) {
 		t.Fatalf("disabled credential retained: %v", err)
 	}
-	for _, uid := range []string{"healthy", "paused", "failed"} {
+	for _, uid := range []string{"healthy", "paused", "failed", "unknown"} {
 		if _, ok := accounts.Status(uid); !ok {
 			t.Fatalf("account should remain: %s", uid)
 		}
 	}
 	accounts.Revive("failed")
+	if zeroCredits {
+		accounts.SetCredits("failed", 50, 100)
+	}
 	w = call("POST", "admin")
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)

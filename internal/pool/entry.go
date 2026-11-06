@@ -72,6 +72,7 @@ type Status struct {
 	UID          string `json:"uid"`
 	Nickname     string `json:"nickname,omitempty"`
 	Credits      int64  `json:"credits"`
+	CreditsKnown bool   `json:"credits_known"`           // 已取得余额；区分真实零余额与尚未查询的默认值
 	CreditsTotal int64  `json:"credits_total,omitempty"` // 积分总额度（各套餐聚合）；0 = 未知（旧 state/查询失败）
 	// CreditsExpiring / CreditsEarliestExpiry / CreditsEarliestRemaining 描述当前积分中
 	// 的到期压力。CreditsExpiring 是配置窗口内的剩余积分；后两者是全部未来到期批次中
@@ -194,6 +195,7 @@ type modelCostEntry struct {
 type entry struct {
 	a            *auth.Auth
 	credits      int64
+	creditsKnown bool
 	creditsTotal int64 // 积分总额度（UserResource 聚合；0 = 未知）
 	// creditsExpiring 配置窗口内即将过期的可用积分子集，是 credits 的一部分。
 	// creditsEarliestExpiry / creditsEarliestRemaining 是全部未来到期批次中的最早一批；
@@ -434,6 +436,7 @@ func (e *entry) fallbackKind(now time.Time) string {
 // stateAccount 单个账号的持久化状态（JSON tag 全小写下划线，向后兼容：缺字段零值）。
 type stateAccount struct {
 	Credits      int64     `json:"credits"`
+	CreditsKnown *bool     `json:"credits_known,omitempty"` // nil = 旧状态，恢复时保守推断
 	CreditsTotal int64     `json:"credits_total,omitempty"`
 	Disabled     bool      `json:"disabled"`
 	Paused       bool      `json:"paused,omitempty"`

@@ -95,6 +95,14 @@ func TestRemoveDisabledLargePoolPersistsOnce(t *testing.T) {
 }
 
 func TestRemoveDisabledRetainsFileFailures(t *testing.T) {
+	testBulkRemovalFileFailures(t, false)
+}
+
+func TestRemoveZeroCreditsRetainsFileFailures(t *testing.T) {
+	testBulkRemovalFileFailures(t, true)
+}
+
+func testBulkRemovalFileFailures(t *testing.T, zeroCredits bool) {
 	dir := t.TempDir()
 	blocked := filepath.Join(dir, "blocked.json")
 	if err := os.Mkdir(blocked, 0700); err != nil {
@@ -111,8 +119,13 @@ func TestRemoveDisabledRetainsFileFailures(t *testing.T) {
 	} {
 		p.Add(a)
 		p.Disable(a.UID, "restricted")
+		p.SetCredits(a.UID, 0, 100)
 	}
-	removed, failed := p.RemoveDisabled()
+	remove := p.RemoveDisabled
+	if zeroCredits {
+		remove = p.RemoveZeroCredits
+	}
+	removed, failed := remove()
 	if removed != 2 || len(failed) != 1 || failed["failed"] == nil {
 		t.Fatalf("removed=%d failed=%v", removed, failed)
 	}

@@ -7,7 +7,7 @@ let remarksCache = null;
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
 let overviewData = null, cfgLoaded = null;
-let removingDisabled = false;
+let removingAccounts = false;
 let accountList = [];
 let accountListState = { q: '', realm: '', status: '', page: 1, size: 20 };
 let expiryListState = { q: '', realm: '', range: '', page: 1, size: 10 };
@@ -572,7 +572,7 @@ async function loadOverview(quiet) {
     $('sHealthy').textContent = d.healthy;
     $('sCooling').textContent = d.cooling;
     $('sDisabled').textContent = d.disabled;
-    updateRemoveDisabledButton();
+    updateAccountRemovalButtons();
     // 暂停选号单列（issue #125）：它只关选号、照常签到保活，与禁用是两种状态。
     if ($('sPaused')) $('sPaused').textContent = d.paused == null ? '-' : d.paused;
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
@@ -610,24 +610,38 @@ async function loadOverview(quiet) {
   }
 }
 
-function updateRemoveDisabledButton() {
-  const b = $('btnRemoveDisabled');
-  const count = Number(overviewData && overviewData.disabled) || 0;
-  b.disabled = removingDisabled || count === 0;
-  b.title = '删除全池 ' + count + ' 个已禁用账号，不受筛选和分页影响';
+const accountRemovalActions = {
+  disabled: {
+    id: 'btnRemoveDisabled', label: '删除已禁用', description: '已禁用账号',
+    endpoint: 'remove_disabled', note: '',
+    count: () => Number(overviewData && overviewData.disabled) || 0,
+  },
+  zeroCredits: {
+    id: 'btnRemoveZeroCredits', label: '删除零积分', description: '可用积分为 0 的账号',
+    endpoint: 'remove_zero_credits', note: '按当前余额记录判断，余额未知的账号会保留。',
+    count: () => ((overviewData && overviewData.accounts) || []).filter(a => a.credits_known === true && a.credits === 0).length,
+  },
+};
+
+function updateAccountRemovalButtons() {
+  for (const action of Object.values(accountRemovalActions)) {
+    const b = $(action.id), count = action.count();
+    b.disabled = removingAccounts || count === 0;
+    b.title = '删除全池 ' + count + ' 个' + action.description + '，不受筛选和分页影响。' + action.note;
+  }
 }
 
-$('btnRemoveDisabled').onclick = async () => {
-  if (removingDisabled) return;
-  const count = Number(overviewData && overviewData.disabled) || 0;
+async function removeAccounts(action) {
+  if (removingAccounts) return;
+  const count = action.count();
   if (!count) return;
-  if (!confirm('将删除全池已禁用账号（当前 ' + count + ' 个），同时删除池状态和 auths/ 下的凭证文件，不受筛选和分页影响。此操作不可恢复，确认删除？')) return;
-  const b = $('btnRemoveDisabled');
-  removingDisabled = true;
+  if (!confirm('将删除全池' + action.description + '（当前 ' + count + ' 个），同时删除池状态和 auths/ 下的凭证文件，不受筛选和分页影响。' + action.note + '此操作不可恢复，确认删除？')) return;
+  const b = $(action.id);
+  removingAccounts = true;
   b.textContent = '删除中…';
-  updateRemoveDisabledButton();
+  updateAccountRemovalButtons();
   try {
-    const r = await api('accounts/remove_disabled', { method: 'POST' });
+    const r = await api('accounts/' + action.endpoint, { method: 'POST' });
     if (r.removed) {
       lastPackages = null;
       lastPackagesAt = 0;
@@ -636,15 +650,18 @@ $('btnRemoveDisabled').onclick = async () => {
     }
     const failed = Number(r.failed) || 0;
     const detail = failed && r.errors && r.errors[0] ? '：' + r.errors[0].uid + '，' + r.errors[0].error : '';
-    toast('已删除 ' + (Number(r.removed) || 0) + ' 个已禁用账号' + (failed ? '；' + failed + ' 个删除失败，已保留' + detail : ''), failed ? 'err' : 'ok');
+    toast('已删除 ' + (Number(r.removed) || 0) + ' 个' + action.description + (failed ? '；' + failed + ' 个删除失败，已保留' + detail : ''), failed ? 'err' : 'ok');
     await loadOverview(true);
   } catch (e) { toast('删除失败：' + e.message, 'err'); }
   finally {
-    removingDisabled = false;
-    b.textContent = '删除已禁用';
-    updateRemoveDisabledButton();
+    removingAccounts = false;
+    b.textContent = action.label;
+    updateAccountRemovalButtons();
   }
-};
+}
+
+$('btnRemoveDisabled').onclick = () => removeAccounts(accountRemovalActions.disabled);
+$('btnRemoveZeroCredits').onclick = () => removeAccounts(accountRemovalActions.zeroCredits);
 
 $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');

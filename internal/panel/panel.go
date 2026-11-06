@@ -171,6 +171,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
 	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importCockpit))
 	p.mux.HandleFunc("POST /panel/api/accounts/remove_disabled", p.withAuth(p.accountsRemoveDisabled))
+	p.mux.HandleFunc("POST /panel/api/accounts/remove_zero_credits", p.withAuth(p.accountsRemoveZeroCredits))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
@@ -727,6 +728,15 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 // accountsRemoveDisabled 用一次请求删除全池禁用账号，不受前端筛选及分页影响。
 func (p *Panel) accountsRemoveDisabled(w http.ResponseWriter, r *http.Request) {
 	removed, failed := p.cfg.Pool.RemoveDisabled()
+	writeAccountRemovalResult(w, "disabled", removed, failed)
+}
+
+func (p *Panel) accountsRemoveZeroCredits(w http.ResponseWriter, r *http.Request) {
+	removed, failed := p.cfg.Pool.RemoveZeroCredits()
+	writeAccountRemovalResult(w, "zero credits", removed, failed)
+}
+
+func writeAccountRemovalResult(w http.ResponseWriter, kind string, removed int, failed map[string]error) {
 	uids := make([]string, 0, len(failed))
 	for uid := range failed {
 		uids = append(uids, uid)
@@ -736,9 +746,9 @@ func (p *Panel) accountsRemoveDisabled(w http.ResponseWriter, r *http.Request) {
 	for _, uid := range uids {
 		message := failed[uid].Error()
 		errors = append(errors, map[string]string{"uid": uid, "error": message})
-		log.Printf("panel: remove disabled uid=%s（凭证文件删除失败，账号保留: %s）", uid, message)
+		log.Printf("panel: remove %s uid=%s（凭证文件删除失败，账号保留: %s）", kind, uid, message)
 	}
-	log.Printf("panel: remove disabled accounts removed=%d failed=%d", removed, len(failed))
+	log.Printf("panel: remove %s accounts removed=%d failed=%d", kind, removed, len(failed))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": len(failed) == 0, "removed": removed, "failed": len(failed), "errors": errors,
 	})

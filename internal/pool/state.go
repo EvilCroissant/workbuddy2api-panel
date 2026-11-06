@@ -133,6 +133,7 @@ func (p *Pool) ReenableIfCredits(uid string, remain, total int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if e, ok := p.byUID[uid]; ok {
+		e.creditsKnown = remain >= 0
 		if remain > 0 && !e.disabled {
 			p.reviveCoolingLocked(e, remain, total)
 		} else {
@@ -596,6 +597,7 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		Enterprise:               e.a.IsEnterprise(),
 		Nickname:                 e.a.Nickname,
 		Credits:                  e.credits,
+		CreditsKnown:             e.creditsKnown,
 		CreditsTotal:             e.creditsTotal,
 		CreditsExpiring:          e.creditsExpiring,
 		CreditsEarliestExpiry:    e.creditsEarliestExpiry,
