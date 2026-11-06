@@ -20,8 +20,7 @@ var (
 	ErrPacketNotFound = errors.New("红包不存在或链接已失效")
 	ErrPacketClosed   = errors.New("红包已过期、领完或被收回")
 	ErrQuotaExhausted = errors.New("红包额度已用完")
-	ErrQuotaBusy      = errors.New("此红包 Key 仍有请求正在执行，请等待全部请求结算后再核对")
-	ErrQuotaUncertain = errors.New("上次请求缺少完整用量，额度已暂停；请联系管理员核对")
+	ErrQuotaBusy      = errors.New("此红包 Key 仍有请求正在执行，请等待全部请求结算后再调整用量")
 )
 
 // KeyQuota is independent of optional usage logging; amounts are integer units.
@@ -36,6 +35,10 @@ type KeyQuota struct {
 	Claimed   bool      `json:"claimed"`
 	Pending   bool      `json:"pending"`
 	Uncertain bool      `json:"uncertain"`
+	// Estimated is included in Used. UnsettledRequests records missing usage,
+	// including requests interrupted by a restart. Neither pauses a usable key.
+	Estimated         int64 `json:"estimated_units,omitempty"`
+	UnsettledRequests int64 `json:"unsettled_requests,omitempty"`
 }
 type PacketInput struct {
 	Title         string   `json:"title"`
@@ -102,7 +105,7 @@ func keyActive(k storedKey) bool {
 	return k.Enabled && (k.Quota == nil || (k.Quota.Claimed && time.Now().Before(k.Quota.ExpiresAt)))
 }
 func validateStoredQuota(q *KeyQuota) error {
-	if q.PacketID == "" || (q.Kind != "credit" && q.Kind != "tokens") || q.Limit <= 0 || q.Used < 0 || q.ExpiresAt.IsZero() {
+	if q.PacketID == "" || (q.Kind != "credit" && q.Kind != "tokens") || q.Limit <= 0 || q.Used < 0 || q.Estimated < 0 || q.Estimated > q.Used || q.UnsettledRequests < 0 || q.ExpiresAt.IsZero() {
 		return errors.New("invalid key quota")
 	}
 	return nil
@@ -424,11 +427,12 @@ func packetClaimResult(k storedKey, secret string, repeated bool) PacketClaim {
 // QuotaLease tracks one request's usage. Concurrent requests settle independently
 // under the store lock, independently of request archives and usage retention.
 type QuotaLease struct {
-	store                  *KeyStore
-	id, kind               string
-	units                  int64
-	outstanding, uncertain bool
-	finished               bool
+	store                *KeyStore
+	id, kind             string
+	units                int64
+	estimated, unsettled int64
+	outstanding          bool
+	finished             bool
 }
 
 func (s *KeyStore) BeginQuota(id string) (*QuotaLease, error) {
@@ -450,8 +454,12 @@ func (s *KeyStore) BeginQuota(id string) (*QuotaLease, error) {
 		if !keyActive(*k) || !time.Now().Before(q.ExpiresAt) {
 			return nil, ErrPacketClosed
 		}
-		if q.Uncertain {
-			return nil, ErrQuotaUncertain
+		// A previous accepted request may have failed to save its settlement.
+		// Retry the retained state automatically before admitting more usage.
+		if s.quotaDirty {
+			if err := s.save(s.keys); err != nil {
+				return nil, err
+			}
 		}
 		if q.Used >= q.Limit {
 			return nil, ErrQuotaExhausted
@@ -473,7 +481,7 @@ func (s *KeyStore) BeginQuota(id string) (*QuotaLease, error) {
 func (l *QuotaLease) StartAttempt() {
 	if l != nil {
 		if l.outstanding {
-			l.uncertain = true
+			l.unsettled++
 		}
 		l.outstanding = true
 	}
@@ -483,10 +491,16 @@ func (l *QuotaLease) RejectAttempt() {
 		l.outstanding = false
 	}
 }
-func (l *QuotaLease) MarkUncertain() {
-	if l != nil {
-		l.uncertain = true
+func (l *QuotaLease) IsTokenQuota() bool { return l != nil && l.kind == "tokens" }
+
+// ObserveEstimatedTokens separates fallback estimates from measured usage.
+func (l *QuotaLease) ObserveEstimatedTokens(tokens int64) {
+	if !l.IsTokenQuota() {
+		return
 	}
+	before := l.units
+	l.Observe(tokens, true, 0, false)
+	l.estimated += l.units - before
 }
 func (l *QuotaLease) Observe(tokens int64, hasTokens bool, credit float64, hasCredit bool) {
 	if l == nil {
@@ -496,19 +510,19 @@ func (l *QuotaLease) Observe(tokens int64, hasTokens bool, credit float64, hasCr
 	var amount int64
 	if l.kind == "tokens" {
 		if !hasTokens || tokens < 0 {
-			l.uncertain = true
+			l.unsettled++
 			return
 		}
 		amount = tokens
 	} else {
 		if !hasCredit || math.IsNaN(credit) || math.IsInf(credit, 0) || credit < 0 || credit > 1e9 {
-			l.uncertain = true
+			l.unsettled++
 			return
 		}
 		amount = int64(math.Ceil(credit*float64(CreditScale) - 1e-8))
 	}
 	if amount > math.MaxInt64-l.units {
-		l.uncertain = true
+		l.unsettled++
 		return
 	}
 	l.units += amount
@@ -531,21 +545,21 @@ func (l *QuotaLease) Finish() (err error) {
 		delete(s.quotaInFlight, l.id)
 	}
 	pending := remaining > 0
-	defer func() {
-		if err != nil {
-			// Keep the durable marker for restart recovery and pause new requests.
-			// Other in-flight requests can still settle before manual reconciliation.
-			for i := range s.keys {
-				if s.keys[i].ID == l.id {
-					s.keys[i].Quota.Pending = pending
-					s.keys[i].Quota.Uncertain = true
-					break
-				}
-			}
-		}
-	}()
+	if l.outstanding {
+		l.unsettled++
+	}
 	keys := cloneKeys(s.keys)
 	packets := append([]storedPacket{}, s.packets...)
+	// Accepted usage must survive a transient write error in memory. The next
+	// save retries this complete snapshot; Finish remains idempotent.
+	saveSettlement := func() error {
+		if err := s.saveState(keys, packets); err != nil {
+			s.keys, s.packets = keys, packets
+			s.quotaDirty = true
+			return err
+		}
+		return nil
+	}
 	for i := range keys {
 		if keys[i].ID == l.id {
 			q := keys[i].Quota
@@ -553,14 +567,16 @@ func (l *QuotaLease) Finish() (err error) {
 				return errors.New("quota overflow")
 			}
 			q.Used += l.units
+			q.Estimated += l.estimated
+			q.UnsettledRequests += l.unsettled
 			q.Pending = pending
-			q.Uncertain = q.Uncertain || l.uncertain || l.outstanding
+			q.Uncertain = q.Uncertain || l.unsettled > 0
 			for j := range packets {
 				if packets[j].ID == q.PacketID {
 					packets[j].UsedUnits += l.units
 				}
 			}
-			return s.saveState(keys, packets)
+			return saveSettlement()
 		}
 	}
 	// A concurrent revocation deletes credentials; retain already billed usage in the packet.
@@ -568,7 +584,7 @@ func (l *QuotaLease) Finish() (err error) {
 		for _, id := range packets[j].Claims {
 			if id == l.id {
 				packets[j].UsedUnits += l.units
-				return s.saveState(keys, packets)
+				return saveSettlement()
 			}
 		}
 	}
@@ -626,6 +642,8 @@ func (s *KeyStore) ReconcileQuota(packetID, keyID string, used float64) error {
 			delta := units - q.Used
 			q.Used = units
 			q.Uncertain = false
+			q.Estimated = 0
+			q.UnsettledRequests = 0
 			for j := range packets {
 				if packets[j].ID == packetID {
 					packets[j].UsedUnits += delta

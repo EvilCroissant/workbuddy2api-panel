@@ -278,8 +278,16 @@ func TestQuotaEnforcementAndRecovery(t *testing.T) {
 	if err = lease.Finish(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-		t.Fatal("missing usage silently free")
+	q := s.List()[0].Quota
+	if !q.Uncertain || q.UnsettledRequests != 1 || q.Used != 1 {
+		t.Fatalf("missing usage was not recorded separately: %+v", q)
+	}
+	resumed, err := s.BeginQuota(c.Key.ID)
+	if err != nil {
+		t.Fatalf("missing usage locked key: %v", err)
+	}
+	if err = resumed.Finish(); err != nil {
+		t.Fatal(err)
 	}
 	if err = s.ReconcileQuota(p.ID, c.Key.ID, 5); err != nil {
 		t.Fatal(err)
@@ -293,8 +301,16 @@ func TestQuotaEnforcementAndRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = restarted.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-		t.Fatal("crash reset billing reservation")
+	q = restarted.List()[0].Quota
+	if q.Pending || !q.Uncertain || q.UnsettledRequests != 1 || q.Used != 5 {
+		t.Fatalf("restart lost known usage or interruption warning: %+v", q)
+	}
+	resumed, err = restarted.BeginQuota(c.Key.ID)
+	if err != nil {
+		t.Fatalf("interrupted request locked key: %v", err)
+	}
+	if err = resumed.Finish(); err != nil {
+		t.Fatal(err)
 	}
 	if err = lease.Finish(); err != nil {
 		t.Fatal(err)
@@ -368,8 +384,9 @@ func TestQuotaConcurrentRequestsSettleIndependently(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := restarted.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-				t.Fatalf("restart lost unfinished requests: %v", err)
+			q := restarted.List()[0].Quota
+			if !q.Uncertain || q.UnsettledRequests != 1 || q.Used != 6*packetScale(kind) || q.Pending {
+				t.Fatalf("restart lost unfinished request warning: %+v", q)
 			}
 			if err := settle(leases[1]); err != nil {
 				t.Fatal(err)
@@ -395,7 +412,7 @@ func TestQuotaConcurrentRequestsSettleIndependently(t *testing.T) {
 				t.Fatal(err)
 			}
 			after, _ = reopened.Packet(p.ID)
-			q := after.Keys[0].Quota
+			q = after.Keys[0].Quota
 			if after.Used != 6*requests || q.Used != int64(6*requests)*packetScale(kind) || q.Pending || q.Uncertain {
 				t.Fatalf("concurrent usage lost or counted twice: %+v quota=%+v", after, q)
 			}
@@ -432,11 +449,15 @@ func TestQuotaConcurrentSettlementFailureKeepsOtherRequestsPending(t *testing.T)
 			}
 			s.path = path
 			after, _ := s.Packet(p.ID)
-			if !after.Keys[0].Quota.Pending || !after.Keys[0].Quota.Uncertain {
+			if !after.Keys[0].Quota.Pending || after.Keys[0].Quota.Uncertain != (failure == "missing_usage") {
 				t.Fatal("failed request cleared the other active request")
 			}
-			if _, err := s.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-				t.Fatalf("new request accepted with uncertain usage: %v", err)
+			resumed, err := s.BeginQuota(c.Key.ID)
+			if err != nil {
+				t.Fatalf("recovered settlement locked key: %v", err)
+			}
+			if err := resumed.Finish(); err != nil {
+				t.Fatal(err)
 			}
 			if err := s.ReconcileQuota(p.ID, c.Key.ID, 17); !errors.Is(err, ErrQuotaBusy) {
 				t.Fatalf("reconciliation accepted before remaining request finished: %v", err)
@@ -450,8 +471,13 @@ func TestQuotaConcurrentSettlementFailureKeepsOtherRequestsPending(t *testing.T)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := reopened.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-				t.Fatalf("later settlement erased uncertain usage: %v", err)
+			after, _ = reopened.Packet(p.ID)
+			wantUsed, wantMissing := int64(40), int64(0)
+			if failure == "missing_usage" {
+				wantUsed, wantMissing = 23, 1
+			}
+			if q := after.Keys[0].Quota; q.Pending || q.Used != wantUsed || q.UnsettledRequests != wantMissing {
+				t.Fatalf("later settlement lost retained charge or warning: %+v", q)
 			}
 			if err := s.ReconcileQuota(p.ID, c.Key.ID, 40); err != nil {
 				t.Fatal(err)
@@ -484,7 +510,7 @@ func TestFailedPacketWriteIsAtomic(t *testing.T) {
 	}
 }
 
-func TestQuotaFailedSettlementCanBeReconciled(t *testing.T) {
+func TestQuotaFailedSettlementRetriesWithoutDoubleCharge(t *testing.T) {
 	s, path := packetStore(t)
 	p, err := s.CreatePacket(packetInput())
 	if err != nil {
@@ -501,23 +527,36 @@ func TestQuotaFailedSettlementCanBeReconciled(t *testing.T) {
 	if err = lease.Finish(); err == nil {
 		t.Fatal("settlement failure hidden")
 	}
-	s.path = path
-	if _, err = s.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-		t.Fatal("failed settlement allowed more usage")
+	if _, err = s.BeginQuota(c.Key.ID); err == nil {
+		t.Fatal("unwritable quota store allowed more usage")
 	}
 	restarted, err := OpenKeys(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = restarted.BeginQuota(c.Key.ID); !errors.Is(err, ErrQuotaUncertain) {
-		t.Fatal("pending reservation lost")
+	if q := restarted.List()[0].Quota; !q.Uncertain || q.UnsettledRequests != 1 || q.Used != 0 {
+		t.Fatalf("pending interruption warning lost: %+v", q)
 	}
-	if err = s.ReconcileQuota(p.ID, c.Key.ID, 17); err != nil {
+	s.path = path
+	if err = lease.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := s.BeginQuota(c.Key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed.StartAttempt()
+	resumed.Observe(3, true, 0, false)
+	if err = resumed.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenKeys(path)
+	if err != nil {
 		t.Fatal(err)
 	}
 	after, _ := s.Packet(p.ID)
-	if after.Used != 17 || after.Keys[0].Quota.Uncertain || after.Keys[0].Quota.Pending {
-		t.Fatalf("bad reconciliation %+v", after)
+	if after.Used != 20 || after.Keys[0].Quota.Uncertain || after.Keys[0].Quota.Pending {
+		t.Fatalf("automatic retry lost or double counted quota: %+v", after)
 	}
 }
 func TestPacketRevocationDuringRequestRetainsCharge(t *testing.T) {

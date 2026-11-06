@@ -114,6 +114,10 @@ type chatStatsReader struct {
 	hasCredit  bool
 	credit     float64
 	errorFrame bool
+	// Quota fallback observes output without retaining complete response text.
+	quotaOutput *quotaTextEstimate
+	sawOutput   bool
+	validFrame  bool
 	// cacheHit/cacheMiss 上游末帧 usage.prompt_cache_hit_tokens / miss_tokens，
 	// 供用量桶的命中率维度与 reqlog 逐次记录（issue #92）。
 	hasCacheHit  bool
@@ -168,8 +172,9 @@ func (s *chatStatsReader) parseSSELine(line string) {
 		s.ttfb = time.Since(s.start)
 	}
 	var chunk struct {
-		Error json.RawMessage `json:"error"`
-		Usage *struct {
+		Error   json.RawMessage `json:"error"`
+		Choices json.RawMessage `json:"choices"`
+		Usage   *struct {
 			PromptTokens         *int     `json:"prompt_tokens"`
 			CompletionTokens     *int     `json:"completion_tokens"`
 			TotalTokens          *int     `json:"total_tokens"`
@@ -178,14 +183,45 @@ func (s *chatStatsReader) parseSSELine(line string) {
 			PromptCacheMissTok   *int     `json:"prompt_cache_miss_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
 		return
 	}
+	s.validFrame = true
 	if len(chunk.Error) > 0 {
 		s.errorFrame = true
+	}
+	if s.quotaOutput != nil {
+		var choices []struct {
+			Delta struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+				Refusal          string `json:"refusal"`
+				ToolCalls        []struct {
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"delta"`
+		}
+		// Optional output shapes must never prevent measured usage parsing.
+		_ = json.Unmarshal(chunk.Choices, &choices)
+		for _, choice := range choices {
+			d := choice.Delta
+			texts := []string{d.Content, d.ReasoningContent, d.Refusal}
+			for _, call := range d.ToolCalls {
+				texts = append(texts, call.Function.Name, call.Function.Arguments)
+			}
+			for _, text := range texts {
+				if text != "" {
+					s.sawOutput = true
+					s.quotaOutput.add(text)
+				}
+			}
+		}
+	}
+	if chunk.Usage == nil {
+		return
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
@@ -389,18 +425,6 @@ type requestTrace struct {
 	// 调用来源，进入 handler 时一次性采集（见 ServeHTTP / captureClientInfo）。
 	clientIP  string
 	userAgent string
-}
-
-func observeQuota(r *http.Request, delta pool.TokenUsageDelta, credit float64, hasCredit bool) {
-	if tr := requestTraceFrom(r); tr != nil {
-		tokens := delta.TotalTokens
-		known := delta.HasTotalTokens
-		if !known && delta.HasPromptTokens && delta.HasCompletionTokens {
-			tokens = delta.PromptTokens + delta.CompletionTokens
-			known = true
-		}
-		tr.quota.Observe(tokens, known, credit, hasCredit)
-	}
 }
 
 // captureClientInfo 采集调用来源（客户端 IP + 截断后的 UA）。开关关闭时保持空串：

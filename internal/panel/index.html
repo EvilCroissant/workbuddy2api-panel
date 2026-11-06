@@ -1137,7 +1137,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <input type="hidden" id="packetAllowedModels">
             </div>
 
-          <p class="hint packet-policy">支持同一 Key 并发请求，按上游真实用量逐笔结算；额度用完后停止新请求，已在执行的请求仍会结算，累计用量可能超出额度。用量缺失时暂停并待管理员核对。</p>
+          <p class="hint packet-policy">支持同一 Key 并发请求，优先按上游用量结算；Token 缺失时估算并标注，积分缺失时记录异常且该次不扣量，Key 继续可用。额度用完后停止新请求，已在执行的请求仍会结算，累计用量可能超出额度。</p>
           <div class="packet-form-actions"><span class="hint" id="packetPreview">—</span><span class="grow"></span><button type="submit" class="primary" id="btnPacketCreate">生成红包</button></div>
           <p class="hint packet-error" id="packetCreateError" role="alert" hidden></p>
         </form>
@@ -1155,7 +1155,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <p class="hint packet-policy">领取时分配额度并生成 Key；收回会删除该红包关联的全部 Key，历史已用额度保留。</p></div>
         <div class="tbl-wrap"><table class="acc zebra"><thead><tr><th>密钥</th><th>状态</th><th>额度</th><th>已用</th><th>剩余</th><th>操作</th></tr></thead><tbody id="packetKeysBody"></tbody></table></div>
         <div class="list-pager" role="group" aria-label="红包密钥分页"><span class="page-info" id="packetKeysPageInfo"></span><label>每页 <select id="packetKeysPageSize"><option value="10">10</option><option value="20" selected>20</option><option value="50">50</option></select></label><button class="xs" id="packetKeysPrev">上一页</button><span id="packetKeysPageNumber">1 / 1</span><button class="xs" id="packetKeysNext">下一页</button></div>
-        <div class="pad" id="packetReconcile" hidden><form id="packetReconcileForm"><label class="fld"><span class="lb" id="packetReconcileLabel">核对后的累计已用额度</span><input id="packetReconcileUsed" type="number" min="0" step="0.000001" required></label><p class="hint">核对上游扣费后填写累计用量，保存后解除暂停。</p><div class="packet-detail-actions"><button type="submit" class="primary" id="btnPacketReconcileSave">保存核对结果</button><button type="button" id="btnPacketReconcileCancel">取消</button></div></form></div>
+        <div class="pad" id="packetReconcile" hidden><form id="packetReconcileForm"><label class="fld"><span class="lb" id="packetReconcileLabel">调整后的累计已用额度</span><input id="packetReconcileUsed" type="number" min="0" step="0.000001" required></label><p class="hint">可选：核实后填写累计已用量，保存会清除估算和用量缺失标记。有请求执行时请等待结算完成。</p><div class="packet-detail-actions"><button type="submit" class="primary" id="btnPacketReconcileSave">保存调整结果</button><button type="button" id="btnPacketReconcileCancel">取消</button></div></form></div>
         <div class="pad" id="packetSecretBox" hidden><label class="fld"><span class="lb">完整 API Key</span><input id="packetSecret" readonly autocomplete="off" spellcheck="false"></label><div class="packet-detail-actions"><button id="btnPacketSecretCopy">复制 Key</button><button id="btnPacketSecretClose">关闭</button></div></div>
       </div>
     </section>

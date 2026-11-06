@@ -251,7 +251,7 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			if err != nil {
 				status, code := http.StatusPaymentRequired, "quota_exceeded"
 				message := err.Error()
-				if !errors.Is(err, httpauth.ErrQuotaExhausted) && !errors.Is(err, httpauth.ErrQuotaUncertain) && !errors.Is(err, httpauth.ErrPacketClosed) {
+				if !errors.Is(err, httpauth.ErrQuotaExhausted) && !errors.Is(err, httpauth.ErrPacketClosed) {
 					status, code = http.StatusServiceUnavailable, "quota_unavailable"
 					log.Printf("ERR: [quota] reserve key=%s: %v", distributedKeyID(r), err)
 					message = "额度存储暂不可用，请联系管理员"
@@ -262,7 +262,7 @@ func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			if lease != nil {
 				defer func() {
 					if err := lease.Finish(); err != nil {
-						log.Printf("ERR: [quota] settle key=%s: %v (key paused)", distributedKeyID(r), err)
+						log.Printf("ERR: [quota] settle key=%s: %v (retained in memory; save will retry)", distributedKeyID(r), err)
 					}
 				}()
 				if r.URL.Path != "/v1/chat/completions" {
@@ -993,6 +993,11 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			status = uerr.Status
 		}
 		if uerr == nil && terr != nil {
+			// No successful response was received. Like HTTP rejections, failed
+			// transport attempts do not consume the caller's packet allowance.
+			if tr := requestTraceFrom(r); tr != nil {
+				tr.quota.RejectAttempt()
+			}
 			// 上游超时 / 停滞：**不换号、不罚号**。
 			//
 			// 超时不是账号的问题：同一份请求换到别的号，撞上的是同一个慢上游，
@@ -1162,6 +1167,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
 			st.status = http.StatusOK
 			stats := newChatStatsReaderSince(rc, st.start)
+			quotaStatsFor(r, stats)
 			// gateway_hint（SSE）：成功状态 200 已开流，中途 error 帧透传时附加
 			// hint 字段（hintFn 惰性求值——正常流零开销，只有真撞到 error 帧才
 			// 组装请求上下文做判定）。
@@ -1227,12 +1233,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.cacheHit, st.cacheMiss, st.hasCache = hit, miss, true
 			}
 			recordAttempt(acct.UID, stats.Usage(), credit, hasCredit, attemptStarted, stats.TTFB())
-			observeQuota(r, stats.Usage(), credit, hasCredit)
-			if !stats.sawDone {
-				if tr := requestTraceFrom(r); tr != nil {
-					tr.quota.MarkUncertain()
-				}
-			}
+			settleQuotaAttempt(r, body, stats)
 			// WARN 信号放 recordAttempt 之后：st.promptTokens 此时才是本次的观测值。
 			if st.hasCache {
 				cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
@@ -1271,10 +1272,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		var quotaStats *chatStatsReader
 		if tr := requestTraceFrom(r); tr != nil && tr.quota != nil {
 			quotaStats = newChatStatsReaderSince(rc, attemptStarted)
+			quotaStatsFor(r, quotaStats)
 			aggregateReader = quotaStats
 		}
 		resp, err := upstream.Aggregate(aggregateReader)
 		rc.Close()
+		settleQuotaAttempt(r, body, quotaStats)
 		if err != nil {
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			// 上游流解析失败：客户端还没看到任何输出，回 502 并告知原因。
@@ -1301,14 +1304,6 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
-		quotaUsage, _ := resp["usage"].(map[string]any)
-		quotaCredit, quotaCreditKnown := quotaUsage["credit"].(float64)
-		observeQuota(r, usageDeltaFromResponse(resp), quotaCredit, quotaCreditKnown)
-		if quotaStats != nil && !quotaStats.sawDone {
-			if tr := requestTraceFrom(r); tr != nil {
-				tr.quota.MarkUncertain()
-			}
-		}
 		if st.hasCache {
 			cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
 		}

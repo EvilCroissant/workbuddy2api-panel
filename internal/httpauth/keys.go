@@ -49,6 +49,7 @@ type KeyStore struct {
 	secretKey     []byte
 	packets       []storedPacket
 	quotaInFlight map[string]int
+	quotaDirty    bool // accepted settlements waiting for a successful save
 }
 
 func OpenKeys(path string) (*KeyStore, error) {
@@ -97,10 +98,16 @@ func OpenKeys(path string) (*KeyStore, error) {
 			if err := validateStoredQuota(k.Quota); err != nil {
 				return nil, err
 			}
-			// An interrupted process may have sent a billable request without settling it.
+			// An interrupted request is an accounting warning, not a permanent ban.
 			if k.Quota.Pending {
 				k.Quota.Uncertain = true
 				k.Quota.Pending = false
+				k.Quota.UnsettledRequests++
+				s.quotaDirty = true
+			}
+			if k.Quota.Uncertain && k.Quota.UnsettledRequests == 0 {
+				k.Quota.UnsettledRequests = 1 // legacy "待核对" record
+				s.quotaDirty = true
 			}
 		}
 		if k.SecretAvailable {
@@ -327,6 +334,7 @@ func (s *KeyStore) saveState(keys []storedKey, packets []storedPacket) error {
 	}
 	s.keys = keys
 	s.packets = packets
+	s.quotaDirty = false
 	return nil
 }
 

@@ -5,10 +5,18 @@ let packetRefreshTimer = null;
 function packetAmount(units, kind) { return Number(units || 0) / (kind === 'credit' ? 1000000 : 1); }
 function packetNumber(n) { return Number(n || 0).toLocaleString('zh-CN', { maximumFractionDigits: 6 }); }
 function packetUnit(kind) { return kind === 'credit' ? '积分' : 'Tokens'; }
+function packetAccountingNote(q) {
+  const notes = [];
+  if (Number(q.estimated_units) > 0) notes.push('含估算 ' + packetNumber(packetAmount(q.estimated_units,q.kind)) + ' ' + packetUnit(q.kind));
+  const missing = Number(q.unsettled_requests) || (q.uncertain ? 1 : 0);
+  if (missing) notes.push('用量缺失 ' + missing + ' 次');
+  return notes.join(' · ');
+}
 function packetQuotaLabel(q) {
   const used = packetAmount(q.used_units, q.kind), limit = packetAmount(q.limit_units, q.kind);
   return packetNumber(used) + ' / ' + packetNumber(limit) + ' ' + packetUnit(q.kind) +
-    (!q.claimed ? ' · 待领取' : q.uncertain ? ' · 待核对' : q.used_units >= q.limit_units ? ' · 已用完' : '');
+    (!q.claimed ? ' · 待领取' : q.used_units >= q.limit_units ? ' · 已用完' : '') +
+    (packetAccountingNote(q) ? ' · ' + packetAccountingNote(q) : '');
 }
 function packetStatus(p) {
   if (p.revoked_at) return 'revoked';
@@ -22,7 +30,6 @@ function packetKeyState(k) {
   if (!k.enabled) return '已停用';
   if (Date.parse(q.expires_at) <= Date.now()) return '已过期';
   if (!q.claimed) return '待领取';
-  if (q.uncertain) return '待核对';
   if (q.used_units >= q.limit_units) return '已用完';
   if (q.pending) return '使用中';
   return '可用';
@@ -89,12 +96,12 @@ function renderPacketDetail() {
   const keys = pageItems(p.keys || [], packetKeysState, 'packetKeys', (p.keys || []).length, '密钥');
   $('packetKeysBody').innerHTML = keys.length ? keys.map(k => {
     const q = k.quota, label = packetKeyState(k);
-    return '<tr><td><b>' + esc(k.name) + '</b><div class="hint"><code>' + esc(k.prefix) + '…</code></div></td><td><span class="tag ' + (label === '可用' ? 'ok' : label === '待核对' ? 'warn' : '') + '">' + label + '</span></td>' +
+    return '<tr><td><b>' + esc(k.name) + '</b><div class="hint"><code>' + esc(k.prefix) + '…</code></div></td><td><span class="tag ' + (label === '可用' ? 'ok' : '') + '">' + label + '</span><div class="hint">' + esc(packetAccountingNote(q)) + '</div></td>' +
       '<td class="num">' + esc(packetNumber(packetAmount(q.limit_units,q.kind))) + ' ' + packetUnit(q.kind) + '</td>' +
       '<td class="num">' + esc(packetNumber(packetAmount(q.used_units,q.kind))) + '</td>' +
       '<td class="num">' + esc(packetNumber(Math.max(0,packetAmount(q.limit_units-q.used_units,q.kind)))) + '</td>' +
       '<td class="acts"><button class="xs ghost" data-packet-key="' + esc(k.id) + '" data-packet-key-action="reveal">查看 Key</button>' +
-      (q.uncertain ? '<button class="xs ghost" data-packet-key="' + esc(k.id) + '" data-packet-key-action="reconcile">核对用量</button>' : '') + '</td></tr>';
+      (q.uncertain || Number(q.estimated_units) > 0 ? '<button class="xs ghost" data-packet-key="' + esc(k.id) + '" data-packet-key-action="reconcile">调整用量</button>' : '') + '</td></tr>';
   }).join('') : '<tr><td colspan="6"><div class="empty">' + emptyText + '</div></td></tr>';
 }
 function updatePacketPreview() {
@@ -152,7 +159,7 @@ $('packetKeysBody').onclick = async ev => {
   if (b.dataset.packetKeyAction === 'reconcile') {
     packetReconcileKey = k.id; $('packetReconcile').hidden = false; $('packetReconcileUsed').value = packetAmount(k.quota.used_units,k.quota.kind);
     $('packetReconcileUsed').step = k.quota.kind === 'tokens' ? '1' : '0.000001';
-    $('packetReconcileLabel').textContent = k.name + ' · 核对后的累计已用' + packetUnit(k.quota.kind); $('packetReconcileUsed').focus(); return;
+    $('packetReconcileLabel').textContent = k.name + ' · 调整后的累计已用' + packetUnit(k.quota.kind); $('packetReconcileUsed').focus(); return;
   }
   const seq = packetDetailSeq; b.disabled = true;
   try { const data = await api('keys/' + encodeURIComponent(k.id) + '/secret'); if (view !== 'redpackets' || seq !== packetDetailSeq) return; $('packetSecret').value = data.secret; $('packetSecretBox').hidden = false; }
@@ -161,7 +168,7 @@ $('packetKeysBody').onclick = async ev => {
 $('packetReconcileForm').onsubmit = async ev => {
   ev.preventDefault(); if (!packetSelected) return;
   const id = packetSelected.id, key = packetReconcileKey; const button = $('btnPacketReconcileSave'); button.disabled = true;
-  try { await api('red-packets/' + encodeURIComponent(id) + '/reconcile', { method:'POST', body:JSON.stringify({ key_id:key, used:Number($('packetReconcileUsed').value) }) }); $('packetReconcile').hidden = true; await loadPacketDetail(id); await loadPackets(); toast('用量已核对', 'ok'); }
+  try { await api('red-packets/' + encodeURIComponent(id) + '/reconcile', { method:'POST', body:JSON.stringify({ key_id:key, used:Number($('packetReconcileUsed').value) }) }); $('packetReconcile').hidden = true; await loadPacketDetail(id); await loadPackets(); toast('用量已调整', 'ok'); }
   catch (e) { toast(e.message, 'err'); } finally { button.disabled = false; }
 };
 $('btnPacketReconcileCancel').onclick = () => { $('packetReconcile').hidden = true; };
