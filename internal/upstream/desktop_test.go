@@ -15,8 +15,8 @@ func TestDesktopExpertChatProfileAndStreaming(t *testing.T) {
 	const upstreamID = "cmb-0123456789abcdef0123456789abcdef"
 	c := &Client{ChatBaseCN: "https://chat.example", HTTP: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
 		for key, want := range map[string]string{
-			"User-Agent": "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0",
-			"Accept":     "application/json", "X-IDE-Version": "5.9.3",
+			"User-Agent": "WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0",
+			"Accept":     "application/json", "X-IDE-Version": "5.11.3",
 			"X-Agent-Intent": "craft", "X-Agent-Type": "main", "X-Agent-Runtime": "other",
 			"X-Expert-Id": "expert-test",
 		} {

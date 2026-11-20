@@ -14,8 +14,8 @@ func TestDesktopRequestProfiles(t *testing.T) {
 	for _, realm := range []struct {
 		name, domain, version, platform string
 	}{
-		{"cn", "copilot.tencent.com", "5.9.3", "WorkBuddy"},
-		{"global", "www.workbuddy.ai", "5.9.4", "workbuddy-ai"},
+		{"cn", "copilot.tencent.com", "5.11.3", "WorkBuddy"},
+		{"global", "www.workbuddy.ai", "5.11.4", "workbuddy-ai"},
 	} {
 		for _, profile := range []string{"default", "versions", "custom-ua", "legacy"} {
 			for _, family := range []string{"chat", "refresh", "billing", "models"} {
@@ -32,7 +32,7 @@ func TestDesktopRequestProfiles(t *testing.T) {
 					c := &Client{HTTP: httpClient, ChatHTTP: httpClient, GlobalEnabled: true,
 						ChatBaseCN: "https://cn.example", ChatBaseGlobal: "https://global.example",
 						BillingBaseCN: "https://billing-cn.example", BillingBaseGlobal: "https://billing-global.example"}
-					version, cliVersion := realm.version, "2.165.0"
+					version, cliVersion := realm.version, "2.176.0"
 					switch profile {
 					case "versions":
 						c.ClientVersion, c.CliVersion = "6.0.0", "3.0.0"

@@ -15,15 +15,15 @@ import (
 
 const (
 	// defaultClientVersionCN 国内版出站 App 版本段（UA 的 `WorkBuddy/<ver>` 与
-	// 白名单头组的 X-IDE-Version）。2026-11-02 核对官方国内桌面端 5.9.3。
+	// 白名单头组的 X-IDE-Version）。2026-11-20 核对官方国内桌面端 5.11.3。
 	// config upstream.client_version 可覆盖（空 = 按 realm 取内置默认）。
-	defaultClientVersionCN = "5.9.3"
-	// defaultClientVersionGlobal 国际版出站 App 版本段。同期官方 WorkBuddy AI 桌面端为 5.9.4。
-	defaultClientVersionGlobal = "5.9.4"
-	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。上述两端桌面包内置 CLI 均为 2.165.0，
+	defaultClientVersionCN = "5.11.3"
+	// defaultClientVersionGlobal 国际版出站 App 版本段。同期官方 WorkBuddy AI 桌面端为 5.11.4。
+	defaultClientVersionGlobal = "5.11.4"
+	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。上述两端桌面包内置 CLI 均为 2.176.0，
 	// 不采用独立发布的 CLI 版本，避免混合桌面与独立 CLI 的指纹。
 	// config upstream.cli_version 可覆盖（空 = 内置默认）。
-	defaultCliVersion = "2.165.0"
+	defaultCliVersion = "2.176.0"
 
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
@@ -69,8 +69,8 @@ func (c *Client) cliVersion() string {
 //   - CN：WorkBuddy（国内版 WorkBuddy.app）
 //   - global：workbuddy-ai（国际版 WorkBuddy AI.app；不是显示名 "WorkBuddy AI"）
 //
-// 当前官方主请求形状：CN `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`；
-// global `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。
+// 当前官方主请求形状：CN `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0`；
+// global `WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0`。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	platform := "WorkBuddy"
 	if a != nil && a.IsGlobal() {

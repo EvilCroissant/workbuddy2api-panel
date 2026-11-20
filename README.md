@@ -105,7 +105,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 ### 实现原理（简述）
 
-任务计分走 `/v2/report` 行为上报，但**不同任务认不同客户端指纹**：CLI 指纹（`www.codebuddy.cn`）、桌面指纹（`copilot.tencent.com` + `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0` UA + `workbuddy-desktop` 事件族）、web 指纹（`www.workbuddy.cn` + `x-client-platform: web`）。网关为每类任务构造对应指纹的判据事件链（`internal/upstream/desktop.go`）；专家类任务额外要求真实专家 id 与真实对话回执（`internal/upstream/streak.go` 之外的 expert 序列）。上报 200 ≠ 计分——面板在执行后轮询任务进度，达标即自动调用 Web 域领奖接口。
+任务计分走 `/v2/report` 行为上报，但**不同任务认不同客户端指纹**：CLI 指纹（`www.codebuddy.cn`）、桌面指纹（`copilot.tencent.com` + `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0` UA + `workbuddy-desktop` 事件族）、web 指纹（`www.workbuddy.cn` + `x-client-platform: web`）。网关为每类任务构造对应指纹的判据事件链（`internal/upstream/desktop.go`）；专家类任务额外要求真实专家 id 与真实对话回执（`internal/upstream/streak.go` 之外的 expert 序列）。上报 200 ≠ 计分——面板在执行后轮询任务进度，达标即自动调用 Web 域领奖接口。
 
 > ⚠️ 行为事件按天幂等：重复点「一键完成」不会重复扣资源，已达标的任务自动跳过。
 
@@ -178,7 +178,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | 上游改动 | 吸收内容 |
 |---|---|
 | 净化增强 | `tool_calls.arguments` 盲区修复（content=null 的工具调用轮此前完全漏净化）、裸 `11128` 反探测改写、桌面版身份句（逗号形态）漏网修复、反馈句整句改写 |
-| 出站头族 | 默认桌面 UA 按 realm 区分：国内 App `5.9.3`、国际 App `5.9.4`，内置 CLI 均为 `2.165.0`；`X-IDE-*` 与 App 版本一致，`X-Agent-Intent/Type/Runtime` 为 `craft/main/other`；`X-Device-Token` 保留 auth 每号 / config / 文件三源 |
+| 出站头族 | 默认桌面 UA 按 realm 区分：国内 App `5.11.3`、国际 App `5.11.4`，内置 CLI 均为 `2.176.0`；`X-IDE-*` 与 App 版本一致，`X-Agent-Intent/Type/Runtime` 为 `craft/main/other`；`X-Device-Token` 保留 auth 每号 / config / 文件三源 |
 | 并发修复 | 客户端 IP 改按请求参数传递（消除共享字段竞态）；billing 单段 UA 形态 |
 | 签到幂等 | `IsAlreadyCheckin` 识别"今天已签到"（code=10001/14001），调度日志不再把重复签到当失败 |
 | 粘性按模型判活 | 会话绑定的账号被 6004 模型级限额后，换模型请求自动解绑重分配（治"限额后换不动号"）；`/healthz` 探活计入模型豁免形态（治"全号被单模型限流探活误报 503"） |
@@ -380,8 +380,8 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |
 | `upstream.user_agent` | 空 | 显式覆盖聊天 / 刷新 / 余额请求的 User-Agent；空 = 按 realm 使用桌面默认 UA，见下文 |
-| `upstream.client_version` | 空 | 空 = 国内 `5.9.3` / 国际 `5.9.4`；非空覆盖两端 UA 的 App 版本与 `X-IDE-Version` |
-| `upstream.cli_version` | 空 | 空 = 桌面内置 CLI `2.165.0`；非空覆盖 UA 的 CLI 段 |
+| `upstream.client_version` | 空 | 空 = 国内 `5.11.3` / 国际 `5.11.4`；非空覆盖两端 UA 的 App 版本与 `X-IDE-Version` |
+| `upstream.cli_version` | 空 | 空 = 桌面内置 CLI `2.176.0`；非空覆盖 UA 的 CLI 段 |
 | `upstream.client_name` | 空 | 空 = `WorkBuddy`；自定义值覆盖 `X-IDE-Name/Type`；`SaaS` 关闭 IDE 归属头，`X-Product` 仍为 `SaaS` |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
 | `prompt.mode` | `custom` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |
@@ -794,9 +794,11 @@ http://127.0.0.1:7863/panel/
 | `activity/growth/tasks/accept` | POST | 接受任务（`{"task_codes":[...]}`） |
 | `activity/growth/tasks/<task_code>/claim` | POST | **领取任务奖励**（任务码在路径、无 body；**Web 域 `www.workbuddy.cn`**，非 CLI 域——这是领奖能成功的关键） |
 
-聊天、刷新与企业模型目录请求默认 UA：国内 `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，国际 `WorkBuddy/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0`。余额 / 签到类请求默认单段 `WorkBuddy/<App版本>`；显式 `upstream.user_agent` 可覆盖这些默认值，模型目录的 IDE / CLI 专用探测与 Web 领奖保留各自指纹。聊天使用 `Accept: application/json`（请求体仍为 `stream:true`），并带 `X-Agent-Intent: craft`、`X-Agent-Type: main`、`X-Agent-Runtime: other`。聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
+聊天、刷新与企业模型目录请求默认 UA：国内 `WorkBuddy/5.11.3 WorkBuddy/5.11.3 CLI/2.176.0`，国际 `WorkBuddy/5.11.4 workbuddy-ai/5.11.4 CLI/2.176.0`。余额 / 签到类请求默认单段 `WorkBuddy/<App版本>`；显式 `upstream.user_agent` 可覆盖这些默认值，模型目录的 IDE / CLI 专用探测与 Web 领奖保留各自指纹。聊天使用 `Accept: application/json`（请求体仍为 `stream:true`），并带 `X-Agent-Intent: craft`、`X-Agent-Type: main`、`X-Agent-Runtime: other`。聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
 
-版本与主聊天字段依据 2026-11-02 核对的官方桌面包及内置 CLI 源码；不是完整逐字节请求复刻。`X-Private-Data` 受账号、模型优化开关与实验配置影响，本项目保留不硬编码该字段的行为；既有设备及兼容头保持原逻辑。
+2026-11-20 核对官方 macOS ARM64 / x64 更新接口及 ARM64 发布包：国内 `5.11.3.43806934`、国际 `5.11.4.44121853`，两端内置 CLI 均为 `2.176.0`。独立 npm CLI 已到 `2.185.0`，桌面 UA 采用桌面包实际内置版本。新增的专家上下文、灰度环境等头按官方上下文有条件生成；`X-Client-Version/Platform/Product` 仅声明和过滤列表不足以证明普通聊天需要发送，未将其硬编码为默认头。配置过 `upstream.user_agent`、`client_version` 或 `cli_version` 的部署仍优先使用显式配置。
+
+版本与主聊天字段依据 2026-11-20 核对的官方桌面包及内置 CLI 源码；不是完整逐字节请求复刻。`X-Private-Data` 受账号、模型优化开关与实验配置影响，本项目保留不硬编码该字段的行为；既有设备及兼容头保持原逻辑。
 
 ## 请求级日志
 
@@ -953,7 +955,7 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 
 ### 如何让官网「使用端」列显示为 WorkBuddy？
 
-默认聊天 UA 已使用 WorkBuddy 桌面形态，国内 App `5.9.3` / 国际 App `5.9.4`，内置 CLI `2.165.0`。需要自定义时，设置 `upstream.user_agent`（或环境变量 `WB2A_USER_AGENT`）；只调整版本时使用 `upstream.client_version` / `upstream.cli_version`，避免 UA 与 `X-IDE-Version` 不一致。官网「使用端」的最终显示仍由服务端归因决定。
+默认聊天 UA 已使用 WorkBuddy 桌面形态，国内 App `5.11.3` / 国际 App `5.11.4`，内置 CLI `2.176.0`。需要自定义时，设置 `upstream.user_agent`（或环境变量 `WB2A_USER_AGENT`）；只调整版本时使用 `upstream.client_version` / `upstream.cli_version`，避免 UA 与 `X-IDE-Version` 不一致。官网「使用端」的最终显示仍由服务端归因决定。
 
 ## 关键断言 ↔ 代码出处
 
